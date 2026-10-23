@@ -1,0 +1,50 @@
+# Parallax detekt configuration. Builds on detekt's defaults; the overrides below
+# reflect decisions specific to this codebase rather than blanket relaxations.
+build:
+  maxIssues: 0
+
+complexity:
+  LongMethod:
+    # Reconstruction stages and Compose screen bodies are legitimately long;
+    # splitting them for a line count would hurt readability.
+    threshold: 110
+  LongParameterList:
+    functionThreshold: 9
+    constructorThreshold: 12
+  TooManyFunctions:
+    thresholdInFiles: 40
+    thresholdInClasses: 30
+    ignoreAnnotatedFunctions: ['Composable']
+  CyclomaticComplexMethod:
+    threshold: 20
+  NestedBlockDepth:
+    threshold: 6
+
+style:
+  MagicNumber:
+    # Design tokens, camera intrinsics and numeric kernels are full of
+    # meaningful constants; naming every one of them adds noise.
+    ignorePropertyDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+    ignoreAnnotated: ['Composable', 'Preview']
+  MaxLineLength:
+    maxLineLength: 120
+  ReturnCount:
+    max: 6
+  ForbiddenComment:
+    # The build must fail if a stub is left behind.
+    values: ['TODO:', 'FIXME:', 'STOPSHIP:']
+  UnusedPrivateMember:
+    ignoreAnnotated: ['Preview']
+
+naming:
+  FunctionNaming:
+    ignoreAnnotated: ['Composable']
+  TopLevelPropertyNaming:
+    constantPattern: '[A-Z][_A-Za-z0-9]*'
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false
+  SwallowedException:
+    active: true

@@ -1,0 +1,32 @@
+# Gradle / Android
+.gradle/
+build/
+*/build/
+**/build/
+local.properties
+.cxx/
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+output-metadata.json
+
+# Keystores must never be committed; release signing reads from the environment.
+*.jks
+*.keystore
+
+# Native host build
+build-host/
+cmake-build-*/
+
+# IDE
+.idea/
+*.iml
+.kotlin/
+.DS_Store
+
+# Test / tooling output
+**/schemas/**/*.tmp
+**/build/reports/
+**/src/test/snapshots/**/*_compare.png
