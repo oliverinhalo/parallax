@@ -78,6 +78,6 @@ object Motion {
     const val PROMPT_MIN_VISIBLE_MILLIS = 1_400L
 
     /** Spring used by the pinch/pan/orbit inertia in the viewer. */
-    val VIEWER_INERTIA_DAMPING = 0.92f
+    const val VIEWER_INERTIA_DAMPING = 0.92f
     const val VIEWER_FLING_STIFFNESS = Spring.StiffnessLow
 }

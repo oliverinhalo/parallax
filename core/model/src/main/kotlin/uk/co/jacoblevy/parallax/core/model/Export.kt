@@ -138,7 +138,14 @@ data class ExportOptions(
 ) {
     /** Target triangle count given the source mesh size. */
     fun targetTriangles(sourceTriangles: Long): Int =
-        (sourceTriangles * decimationPercent / 100).toInt().coerceAtLeast(4)
+        (sourceTriangles * decimationPercent / PERCENT).toInt().coerceAtLeast(MIN_TRIANGLES)
+
+    private companion object {
+        const val PERCENT = 100
+
+        /** A tetrahedron: the fewest triangles that still enclose a volume. */
+        const val MIN_TRIANGLES = 4
+    }
 }
 
 @Serializable

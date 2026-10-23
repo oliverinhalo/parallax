@@ -154,12 +154,23 @@ enum class ThermalStatus(val captureRateScale: Float, val shouldWarn: Boolean) {
 /** Coverage of the subject, as a sphere of bins around it. */
 @Serializable
 data class CoverageMap(
-    val azimuthBins: Int = 24,
-    val elevationBins: Int = 6,
+    val azimuthBins: Int = DEFAULT_AZIMUTH_BINS,
+    val elevationBins: Int = DEFAULT_ELEVATION_BINS,
     /** Row-major [elevationBins] x [azimuthBins], each 0..1. */
-    val bins: FloatArray = FloatArray(24 * 6),
+    val bins: FloatArray = FloatArray(DEFAULT_AZIMUTH_BINS * DEFAULT_ELEVATION_BINS),
 ) {
-    val coverage: Float get() = if (bins.isEmpty()) 0f else bins.count { it > 0.25f }.toFloat() / bins.size
+    /**
+     * Fraction of the sphere covered.
+     *
+     * A bin counts as covered once a quarter of it has been seen: demanding more would leave
+     * the ring never reaching 100% on a subject that simply has no underside to photograph.
+     */
+    val coverage: Float
+        get() = if (bins.isEmpty()) {
+            0f
+        } else {
+            bins.count { it > COVERED_THRESHOLD }.toFloat() / bins.size
+        }
 
     fun binAt(elevation: Int, azimuth: Int): Float {
         if (elevation < 0 || elevation >= elevationBins) return 0f
@@ -174,5 +185,13 @@ data class CoverageMap(
             )
 
     override fun hashCode(): Int =
-        (azimuthBins * 31 + elevationBins) * 31 + bins.contentHashCode()
+        (azimuthBins * HASH_FACTOR + elevationBins) * HASH_FACTOR + bins.contentHashCode()
+
+    companion object {
+        /** 15 degrees of azimuth per bin, and 30 of elevation. */
+        const val DEFAULT_AZIMUTH_BINS = 24
+        const val DEFAULT_ELEVATION_BINS = 6
+        const val COVERED_THRESHOLD = 0.25f
+        private const val HASH_FACTOR = 31
+    }
 }

@@ -187,7 +187,7 @@ enum class QualityPreset(
 
     /** Estimated processing time for a capture with [keyframes] frames. */
     fun estimatedMillis(keyframes: Int): Long =
-        (keyframes.coerceAtMost(maxKeyframes) * secondsPerKeyframe * 1000).toLong()
+        (keyframes.coerceAtMost(maxKeyframes) * secondsPerKeyframe * MILLIS_PER_SECOND).toLong()
 
     /**
      * Estimated peak storage. Dominated by the TSDF volume, whose footprint scales with the
@@ -196,10 +196,30 @@ enum class QualityPreset(
     fun estimatedBytes(keyframes: Int, sceneExtentMetres: Float): Long {
         val voxels = (sceneExtentMetres / voxelSizeMetres).toDouble()
         // Only a shell of the volume is ever allocated, so the surface area term dominates.
-        val volumeBytes = (voxels * voxels * 12.0 * 16.0).toLong()
-        val textureBytes = textureResolution.toLong() * textureResolution * 3
-        val frameBytes = keyframes.toLong() * 2_500_000
+        val volumeBytes = (voxels * voxels * SURFACE_SHELL_VOXELS * BYTES_PER_VOXEL).toLong()
+        val textureBytes = textureResolution.toLong() * textureResolution * BYTES_PER_TEXEL
+        val frameBytes = keyframes.toLong() * BYTES_PER_KEYFRAME
         return volumeBytes + textureBytes + frameBytes
+    }
+
+    private companion object {
+        const val MILLIS_PER_SECOND = 1_000
+
+        /**
+         * Depth of the allocated shell, in voxels, either side of the surface. The TSDF
+         * truncation band is a few voxels wide and blocks are allocated in 8-cubes, so a
+         * surface pulls in about a dozen voxels of thickness.
+         */
+        const val SURFACE_SHELL_VOXELS = 12.0
+
+        /** One voxel: a float distance, a float weight and RGBA, plus block overhead. */
+        const val BYTES_PER_VOXEL = 16.0
+
+        /** The atlas is stored as RGB8 while it is being built. */
+        const val BYTES_PER_TEXEL = 3
+
+        /** A 12 MP JPEG plus its depth map, measured across the test captures. */
+        const val BYTES_PER_KEYFRAME = 2_500_000
     }
 }
 

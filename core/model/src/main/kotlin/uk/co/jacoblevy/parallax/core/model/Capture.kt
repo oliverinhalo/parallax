@@ -51,7 +51,9 @@ data class CameraIntrinsics(
 @Serializable
 data class Pose(val matrix: FloatArray) {
     init {
-        require(matrix.size == 16) { "a pose matrix must have 16 elements, got ${matrix.size}" }
+        require(matrix.size == MATRIX_ELEMENTS) {
+            "a pose matrix must have $MATRIX_ELEMENTS elements, got ${matrix.size}"
+        }
     }
 
     val translationX: Float get() = matrix[12]
@@ -72,6 +74,9 @@ data class Pose(val matrix: FloatArray) {
     override fun hashCode(): Int = matrix.contentHashCode()
 
     companion object {
+        /** A 4x4 matrix. */
+        const val MATRIX_ELEMENTS = 16
+
         fun identity(): Pose = Pose(
             floatArrayOf(
                 1f, 0f, 0f, 0f,

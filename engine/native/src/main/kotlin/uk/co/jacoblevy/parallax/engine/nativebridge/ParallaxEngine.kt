@@ -59,6 +59,9 @@ object ParallaxEngine {
 
     private const val LIBRARY_NAME = "parallax_engine"
 
+    /** sharpness, exposure, contrast, clippedLow, clippedHigh, acceptable. */
+    private const val FRAME_SCORE_VALUES = 6
+
     /** Engine build identifier, for the about screen and crash reports. */
     fun version(): String {
         ensureLoaded()
@@ -138,8 +141,8 @@ object ParallaxEngine {
     fun scoreFrame(luma: ByteBuffer, width: Int, height: Int, rowStride: Int): DoubleArray {
         require(luma.isDirect) { "scoreFrame needs a direct ByteBuffer" }
         ensureLoaded()
-        if (loadFailure != null) return DoubleArray(6)
-        return nativeScoreFrame(luma, width, height, rowStride) ?: DoubleArray(6)
+        if (loadFailure != null) return DoubleArray(FRAME_SCORE_VALUES)
+        return nativeScoreFrame(luma, width, height, rowStride) ?: DoubleArray(FRAME_SCORE_VALUES)
     }
 
     /** Perceptual hash of a preview frame, for near-duplicate rejection. */

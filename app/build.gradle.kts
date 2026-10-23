@@ -11,16 +11,19 @@ android {
         buildConfig = true
     }
 
-    signingConfigs {
-        create("release") {
-            // Release signing is supplied entirely through the environment so
-            // that no keystore, alias or password is ever committed. When the
-            // variables are absent (local debug builds, forks, CI pull-request
-            // runs) the config stays unpopulated and `assembleRelease` produces
-            // an unsigned APK rather than failing the configuration phase.
-            val storePath = System.getenv("PARALLAX_KEYSTORE")
-            if (!storePath.isNullOrBlank() && file(storePath).exists()) {
-                storeFile = file(storePath)
+    // Release signing is supplied entirely through the environment so that no
+    // keystore, alias or password is ever committed. When the variables are
+    // absent -- local builds, forks, CI pull-request runs -- no signing config
+    // is created at all and `assembleRelease` produces an unsigned APK.
+    // Creating an empty config and assigning it would instead fail the build in
+    // `validateSigningRelease`, which is a confusing way to say "no keystore".
+    val keystorePath: String? = System.getenv("PARALLAX_KEYSTORE")
+    val keystore = keystorePath?.takeIf { it.isNotBlank() }?.let(::file)?.takeIf { it.exists() }
+
+    if (keystore != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = keystore
                 storePassword = System.getenv("PARALLAX_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("PARALLAX_KEY_ALIAS")
                 keyPassword = System.getenv("PARALLAX_KEY_PASSWORD")
@@ -30,7 +33,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 }

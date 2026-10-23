@@ -111,27 +111,82 @@ find later:
 
 ---
 
+## Phase 3 — Exporters, room features and texturing ✅
+
+Folded into the native engine (commits `57f6015`, `d83ca91`, `7b71a2b`) because
+every one of them is a pure function of a mesh or a point cloud, and keeping
+them host-testable is worth more than module separation.
+
+- **Every export format**, written by hand with no third-party writer: GLB,
+  glTF + external buffer, OBJ + MTL + PNG, USDZ (64-byte-aligned store-only
+  ZIP), STL, PLY, 3DGS PLY, `.splat`, `.spz` v2, floor plan SVG/PDF/PNG. Each
+  is validated by reading the file back and comparing geometry.
+- **Supporting codecs**, also by hand: JSON parser and writer, PNG encoder
+  (zlib with adaptive row filters), ZIP writer, single-page PDF 1.4 writer.
+- **Plane detection and floor plans**: RANSAC planes with a *signed* normal
+  test, occupancy grid derived from the floor plane, morphological closing,
+  hole filling, Douglas–Peucker, line-intersection regularisation, and 3D
+  vertical-profile opening detection.
+- **Texturing**: per-triangle atlas, view scoring, depth-map visibility, shelf
+  packing with size-scaled gutters, Gauss–Seidel seam levelling, inpainting.
+
+Measured: a 4.2 × 3.1 m synthetic room is measured at **13.00 m²** against a
+true 13.02 m² (0.15% error). `.spz` round-trips through our own reader; it has
+**not** been checked against the reference decoder (ADR-010).
+
+---
+
+## Phase 4 — Data layer ✅
+
+`:core:data`, 58 unit tests, all passing (`./gradlew :core:data:test`).
+
+- **Room schema v1**: projects, folders, annotations, measurements, processing
+  jobs. Metadata only; binaries live on disk (ADR-005). Foreign keys cascade
+  from a project to its annotations, measurements and job, and set null from a
+  deleted folder to its projects, so deleting a folder never deletes a scan.
+  The schema JSON is exported so the first migration has a real baseline.
+- **`ProjectStorage`**: the single definition of the on-disk layout that is a
+  contract with `Pipeline.cpp` — `manifest.json`, `frames/`, `depth/`,
+  `checkpoints/`, `outputs/`, `exports/`. Manifest writes are atomic
+  (temp + rename). Storage accounting, per-category breakdown for the settings
+  dashboard, intermediate purge, and orphan reclamation.
+- **`ProjectBundle`**: `.parallax` export and import as a plain ZIP, so a scan
+  is recoverable with any unzip tool. Entry names are resolved against the
+  destination and refused if they escape it; a failed import unwinds completely.
+- **Repositories**: projects (the only writer of both stores), folders, the
+  processing queue, and settings on DataStore. The queue is persisted so it
+  survives process death, and interrupted jobs are released at startup while
+  keeping the stage they had reached.
+
+### Bugs this phase's tests caught
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| `encodeDefaults` wrote `"pose": null` | An Import capture would have been read as an AR capture with every camera at the origin, with no error anywhere | The pipeline detects pose-less captures with `entry.has("pose")`, and a JSON null answers yes |
+| Bundle import reused annotation ids | Importing a bundle exported from the same device *moved* the original's annotations onto the copy | Annotation and measurement ids are table-wide primary keys, not per project |
+| Robolectric could not start | Every Robolectric test failed in application setup | JDK 17+ needs `--add-exports java.base/jdk.internal.access` for Robolectric's file-descriptor interception |
+| `signingConfig` assigned when unset | `assembleRelease` failed with "supplied proguard configuration does not exist" and then a signing error, on a build that is meant to produce an unsigned APK | An empty signing config still runs `validateSigningRelease`; it is now not created at all when the environment has no keystore |
+
+---
+
 ## Remaining phases
 
-- [ ] **Phase 3 — Exporters**: GLB/glTF, OBJ+MTL, PLY, STL (watertight), USDZ,
-      3DGS PLY/.splat/.spz, floor plan SVG/PDF/PNG, self-contained HTML viewer
-- [ ] **Phase 4 — Data layer**: Room schema, project storage, `.parallax`
-      bundles, library screen
-- [ ] **Phase 5 — Design system**: tokens, theme, components, motion, icon
-- [ ] **Phase 6 — Capture**: ARCore + CameraX, 4 modes, live guidance,
-      coverage visualisation, device capability detection
-- [ ] **Phase 7 — Depth & ML**: sensor depth, monocular depth (LiteRT),
-      scale alignment, segmentation
-- [ ] **Phase 8 — Texturing**: view selection, atlas packing, seam levelling
-- [ ] **Phase 9 — Gaussian splatting**: Vulkan training + renderer, tiers
-- [ ] **Phase 10 — Processing system**: WorkManager queue, foreground service,
-      checkpoint/resume, progress and ETA
-- [ ] **Phase 11 — Viewer**: Filament, render modes, measurement, editing,
+- [ ] **Phase 5 — Capture**: ARCore + CameraX, four modes, live guidance,
+      coverage visualisation, frame scoring, device capability detection,
+      thermal and battery awareness
+- [ ] **Phase 6 — Depth & ML** (`:engine:ml`): sensor depth, monocular depth
+      (Depth Anything V2 **Small**, Apache-2.0 only), scale alignment,
+      subject segmentation
+- [ ] **Phase 7 — Gaussian splatting**: Vulkan compute training and renderer
+- [ ] **Phase 8 — Processing system**: WorkManager queue, foreground service,
+      checkpoint/resume wiring, progress and ETA
+- [ ] **Phase 9 — Viewer**: Filament, render modes, measurement, editing,
       annotations, walk mode
-- [ ] **Phase 12 — Room features**: plane/wall/opening extraction, floor plan
-- [ ] **Phase 13 — AR placement**
-- [ ] **Phase 14 — Polish & hardening**: onboarding, settings, storage
-      dashboard, accessibility, benchmarks, release build, docs
+- [ ] **Phase 10 — Export UI, AR placement, offline HTML viewer**
+- [ ] **Phase 11 — App shell**: navigation, onboarding, library, settings and
+      storage dashboard
+- [ ] **Phase 12 — Polish & hardening**: accessibility pass, screenshot tests,
+      macrobenchmarks, CI, remaining docs
 
 ---
 
@@ -139,8 +194,9 @@ find later:
 
 Stated plainly so nothing here is mistaken for more than it is.
 
-**Verified by tests that run in this repo:** everything in Phase 2, plus the
-Gradle build and APK packaging in Phase 1.
+**Verified by tests that run in this repo:** everything in Phases 2, 3 and 4 —
+255 native gtest assertions and 58 JVM/Robolectric tests — plus the Gradle
+build, R8 release minification and APK packaging from Phase 1.
 
 **Cannot be verified in this environment** (no physical device, no camera, no
 GPU, no ARCore service):

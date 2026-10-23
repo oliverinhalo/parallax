@@ -29,9 +29,6 @@ import uk.co.jacoblevy.parallax.core.designsystem.theme.Radii
 import uk.co.jacoblevy.parallax.core.designsystem.theme.Sizing
 import uk.co.jacoblevy.parallax.core.designsystem.theme.Spacing
 
-/** Visual weight of a badge, mapped to a semantic colour. */
-enum class BadgeTone { Neutral, Accent, Warning, Danger, Success }
-
 /**
  * A small status pill.
  *

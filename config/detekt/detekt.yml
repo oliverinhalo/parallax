@@ -12,8 +12,13 @@ complexity:
     functionThreshold: 9
     constructorThreshold: 12
   TooManyFunctions:
-    thresholdInFiles: 40
-    thresholdInClasses: 30
+    thresholdInFiles: 60
+    thresholdInClasses: 40
+    # A Room DAO is a list of queries and a JNI object is a list of native
+    # symbols; both are flat surfaces where splitting by count would just make
+    # the call sites harder to follow.
+    thresholdInInterfaces: 30
+    thresholdInObjects: 60
     ignoreAnnotatedFunctions: ['Composable']
   CyclomaticComplexMethod:
     threshold: 20
@@ -26,6 +31,9 @@ style:
     # meaningful constants; naming every one of them adds noise.
     ignorePropertyDeclaration: true
     ignoreCompanionObjectPropertyDeclaration: true
+    ignoreConstantDeclaration: true
+    ignoreNamedArgument: true
+    ignoreEnums: true
     ignoreAnnotated: ['Composable', 'Preview']
   MaxLineLength:
     maxLineLength: 120

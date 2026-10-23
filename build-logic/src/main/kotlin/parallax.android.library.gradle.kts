@@ -30,6 +30,22 @@ extensions.configure<LibraryExtension> {
         unitTests {
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
+            // Robolectric reaches into JDK internals to emulate Android's file descriptors and
+            // shared memory. Without these exports every Robolectric test fails during
+            // application setup with "Failed to interact with raw FileDescriptor internals".
+            all { test ->
+                // Gradle 9 fails a test task that discovers nothing. AGP registers generated
+                // test sources (BuildConfig, KSP output) in every module, so the check fires on
+                // any module whose own tests are not written yet rather than only on a real
+                // misconfiguration. Coverage is enforced by the tests themselves, not by this.
+                test.failOnNoDiscoveredTests = false
+                test.jvmArgs(
+                    "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                )
+            }
         }
     }
 

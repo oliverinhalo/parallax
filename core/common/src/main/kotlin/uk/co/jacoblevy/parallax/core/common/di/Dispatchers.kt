@@ -62,7 +62,8 @@ object DispatchersModule {
         // Leave at least one core for the UI and the camera pipeline. On a 4-core phone that
         // means 3 reconstruction threads, which is where throughput plateaus anyway because
         // the stages are memory-bandwidth bound rather than compute bound.
-        val parallelism = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(1, 6)
+        val parallelism = (Runtime.getRuntime().availableProcessors() - 1)
+            .coerceIn(1, MAX_RECONSTRUCTION_THREADS)
         return Dispatchers.Default.limitedParallelism(parallelism)
     }
 
@@ -72,4 +73,7 @@ object DispatchersModule {
     fun providesApplicationScope(
         @DefaultDispatcher dispatcher: CoroutineDispatcher,
     ): CoroutineScope = CoroutineScope(SupervisorJob() + dispatcher)
+
+    /** More than this buys nothing: the stages saturate memory bandwidth first. */
+    private const val MAX_RECONSTRUCTION_THREADS = 6
 }
