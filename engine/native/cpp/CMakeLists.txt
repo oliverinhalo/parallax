@@ -35,9 +35,16 @@ target_include_directories(parallax_core
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${EIGEN_DIR})
 
-# Eigen's vectorised paths assume aligned allocations; disabling the asserts on
-# 32-bit ABIs avoids spurious aborts from over-aligned stack temporaries.
+# EIGEN_MPL2_ONLY keeps us out of the LGPL-licensed corners of Eigen, which
+# matters because Parallax must stay permissively licensed end to end.
 target_compile_definitions(parallax_core PUBLIC EIGEN_MPL2_ONLY)
+
+# zlib (zlib licence, permissive) for PNG texture encoding and for the ZIP
+# containers behind .usdz and .parallax. It ships with the NDK sysroot and is
+# present on every host we build on, so it is a hard dependency rather than an
+# optional one.
+find_package(ZLIB REQUIRED)
+target_link_libraries(parallax_core PUBLIC ZLIB::ZLIB)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(parallax_core PRIVATE
