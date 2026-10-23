@@ -10,6 +10,7 @@
 #include "parallax/features/Features.h"
 #include "parallax/floorplan/PlaneDetection.h"
 #include "parallax/io/ImageIo.h"
+#include "parallax/io/JpegIo.h"
 #include "parallax/io/Json.h"
 #include "parallax/io/MeshReader.h"
 #include "parallax/sfm/BundleAdjustment.h"
@@ -305,10 +306,20 @@ struct Pipeline::Impl {
     return selected;
   }
 
+  /**
+   * Load a frame, in whichever format it was written.
+   *
+   * Capture writes JPEG, because 160 frames is 250 MB of JPEG against 1.3 GB of
+   * PNG and the phone's encoder produces it for free from the camera's YUV
+   * planes. The engine's own tests and its exports use PNG. Sniffing the magic
+   * bytes rather than the extension means a frame renamed by a file manager, or
+   * a bundle written by a different version, still loads.
+   */
   bool loadImage(const FrameRecord& frame, ColorBuffer* out) const {
     std::vector<uint8_t> bytes;
     const fs::path path = projectDir() / "frames" / frame.image_file;
     if (!readFileBytes(path.string(), &bytes)) return false;
+    if (looksLikeJpeg(bytes)) return decodeJpeg(bytes, out);
     return decodePng(bytes, out);
   }
 

@@ -11,6 +11,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import uk.co.jacoblevy.parallax.feature.capture.ui.CaptureRoute
 import uk.co.jacoblevy.parallax.feature.library.LibraryRoute
 import uk.co.jacoblevy.parallax.feature.onboarding.OnboardingRoute
 import uk.co.jacoblevy.parallax.feature.settings.LicencesRoute
@@ -59,9 +60,23 @@ fun ParallaxNavHost(
         composable<ParallaxRoute.Library> {
             LibraryRoute(
                 onOpenProject = { /* wired when the viewer lands */ },
-                onStartCapture = { /* wired when capture lands */ },
+                onStartCapture = { navController.navigate(ParallaxRoute.Capture) },
                 onOpenSettings = { navController.navigate(ParallaxRoute.Settings) },
                 onOpenQueue = { /* wired when processing lands */ },
+            )
+        }
+
+        composable<ParallaxRoute.Capture> {
+            CaptureRoute(
+                // A finished capture goes back to the library, which shows the new scan with
+                // its "not processed" badge. Popping capture off the stack matters: pressing
+                // back from the library must not reopen the camera on a finished scan.
+                onFinished = {
+                    navController.navigate(ParallaxRoute.Library) {
+                        popUpTo(ParallaxRoute.Library) { inclusive = true }
+                    }
+                },
+                onCancelled = navController::popBackStack,
             )
         }
 

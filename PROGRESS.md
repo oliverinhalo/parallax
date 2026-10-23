@@ -215,11 +215,54 @@ true 13.02 m² (0.15% error). `.spz` round-trips through our own reader; it has
 
 ---
 
+## Phase 6 — Capture ✅
+
+83 JVM tests on this module alone, and 11 more on the native JPEG decoder it
+needed.
+
+**The logic, which is all testable without a device.** The parts that decide
+what happens are plain classes behind seams, so the behaviour that matters runs
+in the test suite rather than only on a phone:
+
+- **`CoverageTracker`** — a sphere of bins around the subject, filling over
+  several frames rather than flipping on first sighting, with the largest gap
+  classified as underside, top, back or side.
+- **`GuidanceEngine`** — a pure function from conditions to the single most
+  useful prompt, plus **`GuidanceSession`** for the hysteresis that makes it
+  readable: a prompt holds for 1.4 s, and only a higher-priority one interrupts.
+- **`KeyframeSelector`** — a frame earns its place by adding parallax, rotation,
+  coverage or sharpness; a perceptual hash is the backstop for the case poses
+  cannot catch.
+- **`CaptureBudget`** — per-mode capture rates scaled by thermal state, keyframe
+  ceilings from RAM and preset, and storage projections.
+
+**The device layer, kept thin.** `ArCaptureSession` wraps ARCore and classifies
+every failure into something the user can act on; `CameraBackgroundRenderer` is
+one shader and a quad; `FrameRecorder` converts the camera's YUV planes straight
+to JPEG and writes ARCore's packed 16-bit depth as the engine's raw float
+format; `MediaImporter` builds a pose-less capture from gallery photos or video,
+reading intrinsics from EXIF where they exist.
+
+**A baseline JPEG decoder in the native engine**, because capture writes JPEG
+(250 MB a scan against 1.3 GB of PNG) and the pipeline has to read it. Validated
+against libjpeg-turbo's own output on eight fixtures covering 4:2:0, 4:2:2,
+4:4:4, greyscale, restart markers, flat colour and non-MCU-aligned dimensions —
+regenerate with `tools/make_jpeg_fixtures.py`.
+
+### Bugs this phase's tests caught
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| Chroma sampled at the wrong position | Mean error of 4.4 code values against libjpeg-turbo, worst case 103 | A 4:2:0 chroma sample's centre is half a pixel right and down of the pixel it starts at; nearest-neighbour replication shifts both chroma planes, which shows as colour fringing on every edge |
+| Azimuth gaps masked by the poles | "You missed the back" never fired on a scan missing a whole side | The column average ran over all elevations, so top and bottom rows covered all the way round kept every column above the threshold |
+| The first keyframe was rate-limited | A short scan recorded nothing at all | The throttle measured from a zero initialiser, so the first frame had to wait out the interval |
+| Restarting a capture kept the old frames | Two half-orbits from different starting points reconstructed as one project, producing a worse model than either alone | `start()` reset its own counters but not the recorder's |
+| `LowStorage` ranked below `HoldStill` | A nearly full disk was reported only once tracking was stable | Tracking recovers; storage does not. Re-ranked, with the reasoning recorded on the enum |
+
+---
+
 ## Remaining phases
 
-- [ ] **Phase 6 — Capture**: ARCore + CameraX, four modes, live guidance,
-      coverage visualisation, frame scoring, device capability detection,
-      thermal and battery awareness
 - [ ] **Phase 7 — Depth & ML** (`:engine:ml`): sensor depth, monocular depth
       (Depth Anything V2 **Small**, Apache-2.0 only), scale alignment,
       subject segmentation
@@ -238,9 +281,14 @@ true 13.02 m² (0.15% error). `.spz` round-trips through our own reader; it has
 
 Stated plainly so nothing here is mistaken for more than it is.
 
-**Verified by tests that run in this repo:** everything in Phases 2 to 5 — 255
-native gtest assertions and 157 JVM/Robolectric tests — plus the Gradle build,
-detekt, Android Lint, R8 release minification and APK packaging.
+**Verified by tests that run in this repo:** 266 native gtest assertions and
+240 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
+release minification and APK packaging.
+
+The capture *logic* is covered — coverage accumulation, guidance priority and
+hysteresis, keyframe selection, rate limiting, thermal throttling, the summary
+and the import path. What is not covered is the ARCore session itself, the GL
+camera background and the YUV-to-JPEG conversion, which need a camera.
 
 **Cannot be verified in this environment** (no physical device, no camera, no
 GPU, no ARCore service):

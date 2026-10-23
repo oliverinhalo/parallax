@@ -88,10 +88,17 @@ enum class GuidancePrompt(
         priority = 85,
         haptic = HapticCue.Warning,
     ),
+    /**
+     * The highest priority of any prompt, above even lost tracking.
+     *
+     * Tracking recovers; storage does not. Telling someone to hold still while the last of
+     * their free space fills up spends the only resource that cannot be got back from inside
+     * the capture screen.
+     */
     LowStorage(
         message = "Storage is nearly full",
         detail = "Free some space to keep scanning",
-        priority = 98,
+        priority = 110,
         haptic = HapticCue.Warning,
     ),
     KeepGoing(

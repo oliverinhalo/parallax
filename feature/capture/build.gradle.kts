@@ -12,4 +12,11 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.arcore)
     implementation(libs.androidx.exifinterface)
+
+    testImplementation(projects.core.testing)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.androidx.room.runtime)
+    testImplementation(libs.androidx.room.ktx)
+    testImplementation(libs.androidx.datastore.preferences)
 }

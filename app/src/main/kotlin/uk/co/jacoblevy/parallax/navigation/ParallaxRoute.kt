@@ -17,6 +17,9 @@ sealed interface ParallaxRoute {
     data object Library : ParallaxRoute
 
     @Serializable
+    data object Capture : ParallaxRoute
+
+    @Serializable
     data object Settings : ParallaxRoute
 
     @Serializable

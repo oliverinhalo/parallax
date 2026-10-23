@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The permissions this module's own code needs, declared here rather than only
+  in :app so that the module is self-describing and Lint can see that its calls
+  are permitted. They merge into the application manifest.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+</manifest>
