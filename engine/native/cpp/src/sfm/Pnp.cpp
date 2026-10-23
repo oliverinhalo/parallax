@@ -1,5 +1,6 @@
 #include "parallax/sfm/Pnp.h"
 
+#include <Eigen/Eigenvalues>
 #include <Eigen/SVD>
 #include <cmath>
 
@@ -78,6 +79,32 @@ bool pnpDlt(const std::vector<PointCorrespondence>& correspondences, const Camer
   std::vector<int> all(n);
   for (int i = 0; i < n; ++i) all[i] = i;
   const PointNormalizer norm = PointNormalizer::build(correspondences, all);
+
+  // Reject a near-coplanar point set.
+  //
+  // The DLT is degenerate for coplanar points: the 12-vector null space becomes
+  // multi-dimensional and the recovered projection is arbitrary. This matters enormously in
+  // practice, because the points a scan triangulates are dominated by whatever large flat
+  // surface is in frame -- a floor, a table, a wall -- so a random minimal sample is coplanar
+  // far more often than not, and without this guard RANSAC spends every iteration on garbage
+  // models and reports no consensus at all. Returning false here lets the caller resample.
+  {
+    Vec3 centroid = Vec3::Zero();
+    for (const PointCorrespondence& c : correspondences) centroid += norm.apply(c.world);
+    centroid /= static_cast<double>(n);
+    Mat3 scatter = Mat3::Zero();
+    for (const PointCorrespondence& c : correspondences) {
+      const Vec3 d = norm.apply(c.world) - centroid;
+      scatter += d * d.transpose();
+    }
+    Eigen::SelfAdjointEigenSolver<Mat3> solver(scatter);
+    if (solver.info() == Eigen::Success) {
+      const Vec3 eigenvalues = solver.eigenvalues();  // ascending
+      const double largest = std::max(1e-18, eigenvalues(2));
+      // The out-of-plane extent must be at least a few percent of the in-plane extent.
+      if (eigenvalues(0) / largest < 1e-3) return false;
+    }
+  }
 
   // Two rows per correspondence, solving for the 12 entries of P row-major.
   Eigen::MatrixXd A(2 * n, 12);

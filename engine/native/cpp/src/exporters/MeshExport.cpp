@@ -20,10 +20,6 @@ void appendRaw(std::vector<uint8_t>* out, const T& value) {
   out->insert(out->end(), bytes, bytes + sizeof(T));
 }
 
-void padTo(std::vector<uint8_t>* out, size_t alignment, uint8_t filler) {
-  while (out->size() % alignment != 0) out->push_back(filler);
-}
-
 /// Format a float with enough digits to round-trip, and without an exponent
 /// where avoidable -- some OBJ and USDA consumers dislike `1e-05`.
 std::string formatFloat(double v, int precision = 6) {

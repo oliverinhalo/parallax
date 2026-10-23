@@ -259,7 +259,7 @@ TexturingResult generateTextureAtlas(const Mesh& mesh, const std::vector<Texture
   }
 
   // Safety net: the estimate above ignores the size spread, so shrink until it fits or every
-  // patch is already at the floor, at which point the atlas genuinely cannot hold this mesh.
+  // patch is already at the floor.
   double utilisation = 0.0;
   bool packed = false;
   for (int attempt = 0; attempt < 24 && !packed; ++attempt) {
@@ -276,7 +276,29 @@ TexturingResult generateTextureAtlas(const Mesh& mesh, const std::vector<Texture
     }
     if (!shrank) break;  // already at the minimum patch size
   }
-  if (!packed) return result;
+
+  // Still too many patches for the atlas even at the minimum size. Drop the smallest-area
+  // triangles until it fits rather than abandoning the whole texture: the dropped triangles
+  // keep their vertex colours, so the model is still presentable, and the count is reported.
+  if (!packed) {
+    // packPatches sorted largest-first, so the tail is what to shed.
+    while (!patches.empty()) {
+      const size_t keep = patches.size() * 9 / 10;
+      if (keep == patches.size() || keep < 1) {
+        patches.resize(patches.size() - 1);
+      } else {
+        patches.resize(keep);
+      }
+      if (packPatches(&patches, options.atlas_size, &utilisation)) {
+        packed = true;
+        break;
+      }
+    }
+    if (!packed || patches.empty()) return result;
+    result.stats.triangles_dropped_for_space =
+        result.stats.triangles_textured - static_cast<int>(patches.size());
+    result.stats.triangles_textured = static_cast<int>(patches.size());
+  }
   result.stats.atlas_size = options.atlas_size;
   result.stats.atlas_utilisation = utilisation;
 

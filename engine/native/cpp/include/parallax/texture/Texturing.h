@@ -55,6 +55,16 @@ struct TexturingOptions {
 struct TexturingStats {
   int triangles_textured = 0;
   int triangles_without_view = 0;
+  /**
+   * Triangles that had a usable view but no room in the atlas.
+   *
+   * A per-triangle atlas needs roughly (size / (min_patch + 2 * padding))^2 slots, so the
+   * atlas size and the triangle count are coupled: a 1024 atlas cannot texture a 60k-triangle
+   * mesh however small the patches get. Rather than failing the whole stage, the lowest-area
+   * triangles are left untextured and counted here, because a partial texture is far more
+   * useful than none.
+   */
+  int triangles_dropped_for_space = 0;
   int atlas_size = 0;
   double atlas_utilisation = 0.0;
   double mean_incidence_deg = 0.0;

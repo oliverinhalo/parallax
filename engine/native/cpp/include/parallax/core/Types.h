@@ -68,6 +68,29 @@ struct CameraIntrinsics {
   }
 
   bool valid() const { return fx > 0.0 && fy > 0.0 && width > 0 && height > 0; }
+
+  /**
+   * Rescale for a different image size.
+   *
+   * Needed constantly: depth and colour almost never arrive at the same resolution (ARCore's
+   * depth is typically 160x120 against a multi-megapixel image), and using one's intrinsics
+   * with the other's pixels silently shifts every projection by a large fraction of the frame.
+   * Distortion coefficients are dimensionless in normalised coordinates, so they carry over
+   * unchanged.
+   */
+  CameraIntrinsics scaledTo(int new_width, int new_height) const {
+    if (!valid() || new_width <= 0 || new_height <= 0) return *this;
+    const double sx = static_cast<double>(new_width) / width;
+    const double sy = static_cast<double>(new_height) / height;
+    CameraIntrinsics scaled = *this;
+    scaled.fx = fx * sx;
+    scaled.fy = fy * sy;
+    scaled.cx = cx * sx;
+    scaled.cy = cy * sy;
+    scaled.width = new_width;
+    scaled.height = new_height;
+    return scaled;
+  }
 };
 
 /// A single-channel 8-bit image view onto caller-owned memory.

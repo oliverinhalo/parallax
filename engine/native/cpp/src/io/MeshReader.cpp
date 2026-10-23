@@ -39,10 +39,6 @@ size_t plyTypeSize(const std::string& type) {
   return 0;
 }
 
-bool plyTypeIsFloat(const std::string& type) {
-  return type == "float" || type == "float32" || type == "double" || type == "float64";
-}
-
 /// Read one scalar of the named PLY type from a binary little-endian buffer.
 bool readPlyScalar(const std::vector<uint8_t>& bytes, size_t* pos, const std::string& type,
                    double* out) {
