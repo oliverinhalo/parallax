@@ -47,9 +47,11 @@ extensions.configure<LibraryExtension> {
 
 kotlin {
     compilerOptions {
-        // `-Xjvm-default=all` lets interfaces carry default methods, which keeps
-        // the repository interfaces in :core:data free of abstract-member churn.
-        freeCompilerArgs.addAll("-Xjvm-default=all")
+        // Interface default methods are compiled into the interface rather than
+        // into synthetic DefaultImpls classes, which keeps the repository
+        // interfaces in :core:data free of abstract-member churn. The flag was
+        // renamed from -Xjvm-default in Kotlin 2.2.
+        freeCompilerArgs.addAll("-jvm-default=enable")
         allWarningsAsErrors = providers.gradleProperty("parallax.warningsAsErrors")
             .map(String::toBoolean).orElse(false)
     }

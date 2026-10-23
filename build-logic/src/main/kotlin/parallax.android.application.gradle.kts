@@ -72,7 +72,7 @@ extensions.configure<ApplicationExtension> {
 
 kotlin {
     compilerOptions {
-        freeCompilerArgs.addAll("-Xjvm-default=all")
+        freeCompilerArgs.addAll("-jvm-default=enable")
     }
 }
 
