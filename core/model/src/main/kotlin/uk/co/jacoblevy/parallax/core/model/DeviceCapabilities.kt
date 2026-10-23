@@ -131,3 +131,18 @@ data class Resolution(val width: Int, val height: Int) {
     val megapixels: Float get() = width * height / 1_000_000f
     override fun toString(): String = "${width}x$height"
 }
+
+/**
+ * Resolves what this device can actually do.
+ *
+ * A port rather than a concrete class: answering the question needs ARCore, Vulkan, the camera
+ * list and `ActivityManager`, and neither the settings screen nor the capture screen should have
+ * to carry those dependencies just to ask whether splat training is possible. The
+ * implementation lives in `:app`.
+ *
+ * Implementations are expected to cache. Nothing here can change while the process is alive
+ * except ARCore's install state, which is re-read when the capture screen opens.
+ */
+interface DeviceCapabilityProvider {
+    suspend fun resolve(): DeviceCapabilities
+}

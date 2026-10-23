@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the share sheet may read.
+
+  Only `files/shared` is exposed, and exports are copied there for the duration
+  of a share. A `FileProvider` path has no wildcards, so a provider rooted at
+  `projects/` in order to reach each project's `exports/` would hand any app
+  that receives a share URI a path into every captured frame, checkpoint and
+  database file as well.
+-->
+<paths>
+    <files-path name="shared" path="shared/" />
+</paths>

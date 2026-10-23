@@ -16,7 +16,9 @@ import uk.co.jacoblevy.parallax.core.data.database.MeasurementDao
 import uk.co.jacoblevy.parallax.core.data.database.ParallaxDatabase
 import uk.co.jacoblevy.parallax.core.data.database.ProcessingJobDao
 import uk.co.jacoblevy.parallax.core.data.database.ProjectDao
+import uk.co.jacoblevy.parallax.core.data.repository.IdGenerator
 import uk.co.jacoblevy.parallax.core.data.repository.TimeSource
+import uk.co.jacoblevy.parallax.core.data.repository.UuidIdGenerator
 import uk.co.jacoblevy.parallax.core.data.settings.SettingsRepository
 import java.io.File
 import javax.inject.Singleton
@@ -60,4 +62,8 @@ object DataModule {
     @Provides
     @Singleton
     fun timeSource(): TimeSource = TimeSource { System.currentTimeMillis() }
+
+    @Provides
+    @Singleton
+    fun idGenerator(generator: UuidIdGenerator): IdGenerator = generator
 }

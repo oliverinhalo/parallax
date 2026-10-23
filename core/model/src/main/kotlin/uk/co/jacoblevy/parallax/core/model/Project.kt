@@ -140,6 +140,24 @@ enum class OutputKind {
     WatertightMesh,
 }
 
+private const val MILLIS_PER_SECOND = 1_000
+
+/**
+ * Depth of the allocated shell, in voxels, either side of the surface. The TSDF truncation band
+ * is a few voxels wide and blocks are allocated in 8-cubes, so a surface pulls in about a dozen
+ * voxels of thickness.
+ */
+private const val SURFACE_SHELL_VOXELS = 12.0
+
+/** One voxel: a float distance, a float weight and RGBA, plus block overhead. */
+private const val BYTES_PER_VOXEL = 16.0
+
+/** The atlas is stored as RGB8 while it is being built. */
+private const val BYTES_PER_TEXEL = 3
+
+/** A 12 MP JPEG plus its depth map, measured across the test captures. */
+private const val BYTES_PER_KEYFRAME = 2_500_000
+
 /**
  * Quality presets. The numbers here are the actual knobs the pipeline reads, kept in the domain
  * model so the "estimated time and storage" shown next to each preset is derived from the same
@@ -202,25 +220,6 @@ enum class QualityPreset(
         return volumeBytes + textureBytes + frameBytes
     }
 
-    private companion object {
-        const val MILLIS_PER_SECOND = 1_000
-
-        /**
-         * Depth of the allocated shell, in voxels, either side of the surface. The TSDF
-         * truncation band is a few voxels wide and blocks are allocated in 8-cubes, so a
-         * surface pulls in about a dozen voxels of thickness.
-         */
-        const val SURFACE_SHELL_VOXELS = 12.0
-
-        /** One voxel: a float distance, a float weight and RGBA, plus block overhead. */
-        const val BYTES_PER_VOXEL = 16.0
-
-        /** The atlas is stored as RGB8 while it is being built. */
-        const val BYTES_PER_TEXEL = 3
-
-        /** A 12 MP JPEG plus its depth map, measured across the test captures. */
-        const val BYTES_PER_KEYFRAME = 2_500_000
-    }
 }
 
 /** What capture produced, summarised for the library and the processing estimate. */

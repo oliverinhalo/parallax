@@ -56,6 +56,8 @@ dependencies {
     implementation(projects.engine.native)
     implementation(projects.engine.ml)
 
+    implementation(libs.arcore)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)

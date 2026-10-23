@@ -169,22 +169,66 @@ true 13.02 m² (0.15% error). `.spz` round-trips through our own reader; it has
 
 ---
 
+## Phase 5 — App shell, library, onboarding, settings ✅
+
+157 JVM/Robolectric tests across six modules, all passing.
+
+- **`:app`**: Hilt application, `MainActivity` that holds the splash until the
+  stored theme is known (drawing with defaults first flashes the wrong theme on
+  every cold start), type-safe navigation graph, edge-to-edge with transparent
+  bars, and the adaptive icon — the parallax motif, two offset outlines of the
+  same cube, with a themed monochrome layer for Android 13+.
+- **No `INTERNET` permission.** The on-device promise is enforced by the
+  platform rather than asserted in the README.
+- **`AndroidDeviceCapabilityProvider`**: ARCore availability, Depth API
+  pre-check, time-of-flight detection, Vulkan *compute* (not merely a Vulkan
+  version — some devices report one with no compute queue), RAM, cores, camera
+  resolutions. Every probe degrades to the conservative answer on failure,
+  because an OEM returning null for a stream configuration map must not take the
+  app down at startup.
+- **`:feature:library`**: adaptive grid with status badges and per-mode
+  placeholders, search over names and notes, folder/mode/favourite filters,
+  multi-select with bulk delete and move, rename, `.parallax` import through the
+  Storage Access Framework, and thumbnails decoded off the main thread at a
+  bounded size.
+- **`:feature:onboarding`**: four pages (promise, modes, technique, permission)
+  with the camera permission asked in context, and a permanent denial
+  distinguished from a refusal so the UI stops offering a button Android will
+  ignore.
+- **`:feature:settings`**: storage dashboard with a stacked bar and legend read
+  from the filesystem rather than the database's cached column, frame
+  reclamation that refuses to touch an unprocessed capture, every preference,
+  the device's limitations spelled out, and an in-app licences screen.
+- **Share staging** lives in `files/shared`, exposed through a `FileProvider`
+  path of its own. A provider rooted at `projects/` to reach each project's
+  `exports/` would hand any app receiving a share URI a path into every frame,
+  checkpoint and database file.
+
+### Bugs this phase's tests caught
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| Kotlin backend crash in `:core:model` | `AssertionError: SyntheticAccessorLowering should not attempt to modify other files`, reported as an error but with the build still passing | Private companion constants inside an enum class; moved to file scope |
+| Robolectric could not start under JDK 17+ | Every Robolectric test failed in application setup | Needs `--add-exports java.base/jdk.internal.access` for its file-descriptor interception |
+| ViewModel tests were non-deterministic | State read before a write had landed | Room's default executors and DataStore's default scope are real background threads; both are now pinned to the test scheduler (`MainDispatcherRule`, `DirectExecutor`) |
+| `assembleRelease` failed two ways | Missing ProGuard file, then a signing error on a build meant to be unsigned | AGP 9 fails on a missing `proguard-rules.pro`, and an empty signing config still runs `validateSigningRelease` |
+
+---
+
 ## Remaining phases
 
-- [ ] **Phase 5 — Capture**: ARCore + CameraX, four modes, live guidance,
+- [ ] **Phase 6 — Capture**: ARCore + CameraX, four modes, live guidance,
       coverage visualisation, frame scoring, device capability detection,
       thermal and battery awareness
-- [ ] **Phase 6 — Depth & ML** (`:engine:ml`): sensor depth, monocular depth
+- [ ] **Phase 7 — Depth & ML** (`:engine:ml`): sensor depth, monocular depth
       (Depth Anything V2 **Small**, Apache-2.0 only), scale alignment,
       subject segmentation
-- [ ] **Phase 7 — Gaussian splatting**: Vulkan compute training and renderer
-- [ ] **Phase 8 — Processing system**: WorkManager queue, foreground service,
+- [ ] **Phase 8 — Gaussian splatting**: Vulkan compute training and renderer
+- [ ] **Phase 9 — Processing system**: WorkManager queue, foreground service,
       checkpoint/resume wiring, progress and ETA
-- [ ] **Phase 9 — Viewer**: Filament, render modes, measurement, editing,
+- [ ] **Phase 10 — Viewer**: Filament, render modes, measurement, editing,
       annotations, walk mode
-- [ ] **Phase 10 — Export UI, AR placement, offline HTML viewer**
-- [ ] **Phase 11 — App shell**: navigation, onboarding, library, settings and
-      storage dashboard
+- [ ] **Phase 11 — Export UI, AR placement, offline HTML viewer**
 - [ ] **Phase 12 — Polish & hardening**: accessibility pass, screenshot tests,
       macrobenchmarks, CI, remaining docs
 
@@ -194,9 +238,9 @@ true 13.02 m² (0.15% error). `.spz` round-trips through our own reader; it has
 
 Stated plainly so nothing here is mistaken for more than it is.
 
-**Verified by tests that run in this repo:** everything in Phases 2, 3 and 4 —
-255 native gtest assertions and 58 JVM/Robolectric tests — plus the Gradle
-build, R8 release minification and APK packaging from Phase 1.
+**Verified by tests that run in this repo:** everything in Phases 2 to 5 — 255
+native gtest assertions and 157 JVM/Robolectric tests — plus the Gradle build,
+detekt, Android Lint, R8 release minification and APK packaging.
 
 **Cannot be verified in this environment** (no physical device, no camera, no
 GPU, no ARCore service):

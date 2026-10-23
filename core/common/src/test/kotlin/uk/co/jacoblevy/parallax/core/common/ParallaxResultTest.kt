@@ -71,7 +71,7 @@ class ParallaxResultTest {
     fun `a flow emits loading first and converts a throw into a failure`() = runTest {
         val emissions = flow {
             emit(1)
-            throw IllegalStateException("boom")
+            error("boom")
         }.asParallaxResult().toList()
 
         assertThat(emissions[0].isLoading).isTrue()

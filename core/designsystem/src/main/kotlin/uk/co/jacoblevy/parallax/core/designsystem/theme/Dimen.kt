@@ -80,6 +80,9 @@ object Sizing {
     val statPillHeight: Dp = 28.dp
     val progressBarHeight: Dp = 6.dp
     val coverageDomeSize: Dp = 108.dp
+
+    /** The storage dashboard's stacked bar. Thick enough to read its segments at a glance. */
+    val storageBarHeight: Dp = 14.dp
 }
 
 /** Blur radii for the glass surfaces on capture overlays. */

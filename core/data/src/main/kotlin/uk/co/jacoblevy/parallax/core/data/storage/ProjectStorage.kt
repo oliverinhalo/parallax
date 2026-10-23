@@ -65,6 +65,27 @@ class ProjectStorage @Inject constructor(
 
     fun outputFile(projectId: String, name: String): File = File(outputsDir(projectId), name)
 
+    /**
+     * The one directory the share sheet can read.
+     *
+     * Separate from `projects/` on purpose. A `FileProvider` path has no wildcards, so rooting
+     * it at `projects/` to reach each project's `exports/` would expose every project's frames,
+     * checkpoints and outputs to whatever app receives a share URI. Files are copied here for
+     * the duration of a share and swept afterwards.
+     */
+    fun sharedDir(): File = File(context.filesDir, SHARED).apply { mkdirs() }
+
+    fun sharedFile(name: String): File = File(sharedDir(), name)
+
+    /** Delete everything staged for sharing. Called at startup and after a share completes. */
+    fun clearShared(): Long {
+        val dir = sharedDir()
+        val freed = directorySize(dir)
+        dir.deleteRecursively()
+        dir.mkdirs()
+        return freed
+    }
+
     /** Create the directory tree for a new project. Idempotent, so resuming a capture is safe. */
     @Throws(IOException::class)
     fun create(projectId: String): File {
@@ -216,6 +237,7 @@ class ProjectStorage @Inject constructor(
         const val CHECKPOINTS = "checkpoints"
         const val OUTPUTS = "outputs"
         const val EXPORTS = "exports"
+        const val SHARED = "shared"
         const val MANIFEST = "manifest.json"
         const val THUMBNAIL = "thumbnail.jpg"
 

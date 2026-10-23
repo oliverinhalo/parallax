@@ -11,6 +11,10 @@ complexity:
   LongParameterList:
     functionThreshold: 9
     constructorThreshold: 12
+    # Compose's convention is explicit parameters with defaults. Bundling a
+    # component's callbacks into a holder object hurts previews and recomposition
+    # skipping without making the call site any clearer.
+    ignoreAnnotated: ['Composable']
   TooManyFunctions:
     thresholdInFiles: 60
     thresholdInClasses: 40

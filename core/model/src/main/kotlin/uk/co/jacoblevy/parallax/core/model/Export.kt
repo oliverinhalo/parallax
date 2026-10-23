@@ -123,6 +123,11 @@ enum class ExportFormat(
     }
 }
 
+private const val PERCENT = 100
+
+/** A tetrahedron: the fewest triangles that still enclose a volume. */
+private const val MIN_TRIANGLES = 4
+
 /** The options an export dialog collects. */
 @Serializable
 data class ExportOptions(
@@ -140,12 +145,6 @@ data class ExportOptions(
     fun targetTriangles(sourceTriangles: Long): Int =
         (sourceTriangles * decimationPercent / PERCENT).toInt().coerceAtLeast(MIN_TRIANGLES)
 
-    private companion object {
-        const val PERCENT = 100
-
-        /** A tetrahedron: the fewest triangles that still enclose a volume. */
-        const val MIN_TRIANGLES = 4
-    }
 }
 
 @Serializable
