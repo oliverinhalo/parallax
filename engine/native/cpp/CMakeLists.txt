@@ -70,6 +70,8 @@ find_program(PARALLAX_GLSLC
     ${ANDROID_NDK}/shader-tools/windows-x86_64
     $ENV{ANDROID_NDK_HOME}/shader-tools/linux-x86_64
     $ENV{ANDROID_NDK_ROOT}/shader-tools/linux-x86_64
+    $ENV{ANDROID_NDK_LATEST_HOME}/shader-tools/linux-x86_64
+    $ENV{ANDROID_NDK_LATEST_HOME}/shader-tools/darwin-x86_64
   DOC "SPIR-V compiler from the Android NDK or the Vulkan SDK")
 
 if(NOT PARALLAX_GLSLC)

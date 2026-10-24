@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -210,7 +211,10 @@ private fun DestinationPicker(
     onDestination: (ExportDestination) -> Unit,
 ) {
     ParallaxSection(title = "Where it goes") {
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
             for (destination in ExportDestination.entries) {
                 ParallaxChip(
                     text = destination.label,
@@ -237,7 +241,13 @@ private fun OptionsPanel(
                 style = MaterialTheme.typography.labelLarge,
                 color = ParallaxTheme.colors.textSecondary,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            // Five unit names do not fit one line on a phone, and at a large
+            // font scale they do not fit two. Wrapping is the only layout that
+            // keeps every option reachable.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
                 for (unit in LengthUnit.entries) {
                     ParallaxChip(
                         text = unit.label,

@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -291,12 +292,13 @@ private fun Overlay(
             }
         }
 
-        Row(
+        FlowRow(
             Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.md),
             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
             if (state.placement.isPlaced) {
                 ParallaxChip(

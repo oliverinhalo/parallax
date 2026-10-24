@@ -3,6 +3,7 @@ package uk.co.jacoblevy.parallax.core.designsystem.theme
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -135,7 +136,14 @@ fun ParallaxTheme(
             colorScheme = colorScheme,
             typography = ParallaxTypography,
             shapes = ParallaxShapes,
-            content = content,
-        )
+        ) {
+            // The theme paints its own background rather than leaving it to
+            // the window. The activity's `windowBackground` follows the
+            // *system* dark mode, while this follows the user's choice in
+            // settings, so a screen without its own surface -- the viewer, the
+            // camera overlays -- would otherwise be drawn on a light window
+            // whenever the two disagree.
+            Surface(color = parallaxColors.surfaceSunken, content = content)
+        }
     }
 }
