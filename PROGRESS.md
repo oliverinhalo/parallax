@@ -261,14 +261,58 @@ regenerate with `tools/make_jpeg_fixtures.py`.
 
 ---
 
+## Phase 7 — Depth, ML and the processing system ✅
+
+Phases 7 and 9 of the original plan landed together, because they are one
+question seen from two ends: *where does depth come from on a device that has
+none*, and *what drives the pipeline that consumes it*. Splitting them would
+have meant shipping a depth path with nothing to run it.
+
+**Depth, in three tiers, chosen per device.** ARCore's depth API when the
+device provides it; otherwise monocular depth from Depth Anything V2 Small
+(Apache-2.0 — the Base and Large weights are CC-BY-NC and are not used) run
+through LiteRT; and below that, native multi-view stereo. The third tier is
+what makes the app work on *any* device in the minSdk 29 range, including one
+with no depth sensor and no model on disk.
+
+`MultiViewStereo` is a plane sweep: for each keyframe, a handful of neighbours
+are chosen by baseline-to-depth ratio and view alignment, hypotheses are spaced
+uniformly in inverse depth, scored by normalised cross-correlation, filtered
+for geometric consistency between views and median-smoothed. Untextured regions
+are rejected rather than guessed at, by a minimum patch-norm threshold — a
+blank wall returns no depth instead of a confident wrong answer.
+
+`DepthScaleAligner` fits monocular relative depth to metric scale against the
+sparse points from SfM. The fit is affine **in inverse depth**, which is where
+the relationship is actually linear, by RANSAC over two-point minimal samples
+with a least-squares refit on the inliers and a deterministic 48-bit LCG so the
+same capture always produces the same model.
+
+**The processing system.** `ReconstructionRunner` drives the ten stages and
+translates the engine's JSON contract; `ReconstructionWorker` is one
+CoroutineWorker that drains the whole queue rather than one worker per project,
+because reconstruction is memory- and thermally-bound and two at once is slower
+than two in sequence. Everything that survives a kill is on disk: the queue in
+the database, each stage checkpointed by the engine. Progress arrives from the
+native thread many times a second and is coalesced onto a 400 ms timer, so the
+database, the library, the processing screen and the notification all read one
+source of truth and a twenty-minute run does a few thousand writes rather than
+a few million.
+
+### Bugs this phase's tests caught
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| Missing kotlinx-serialization plugin | `SerializationException` at the first stage of every run | `:feature:processing` declared the dependency but not the compiler plugin, so the `@Serializable` contract classes had no generated serialiser. A compile-clean module that cannot run a single job |
+| Expedited work rejected at enqueue | `IllegalArgumentException: Expedited jobs only support network and storage constraints` | Reconstruction must not run on a hot or nearly flat battery, and those constraints are incompatible with expedited work. Expedited was dropped; the user-visible foreground notification is what the queue needs, not the quota |
+| Config defaults silently omitted | The runner and the engine disagreed on `truncationMultiplier` | `encodeDefaults = false` dropped any field left at its default from the JSON the engine parses |
+| Stage completion written per tick | A resumed job restarted its stage | The completed-stage counter is what makes resume work; it is now written when the stage ordinal advances rather than on the progress timer |
+
+---
+
 ## Remaining phases
 
-- [ ] **Phase 7 — Depth & ML** (`:engine:ml`): sensor depth, monocular depth
-      (Depth Anything V2 **Small**, Apache-2.0 only), scale alignment,
-      subject segmentation
 - [ ] **Phase 8 — Gaussian splatting**: Vulkan compute training and renderer
-- [ ] **Phase 9 — Processing system**: WorkManager queue, foreground service,
-      checkpoint/resume wiring, progress and ETA
 - [ ] **Phase 10 — Viewer**: Filament, render modes, measurement, editing,
       annotations, walk mode
 - [ ] **Phase 11 — Export UI, AR placement, offline HTML viewer**
@@ -281,8 +325,8 @@ regenerate with `tools/make_jpeg_fixtures.py`.
 
 Stated plainly so nothing here is mistaken for more than it is.
 
-**Verified by tests that run in this repo:** 266 native gtest assertions and
-240 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
+**Verified by tests that run in this repo:** 281 native gtest assertions and
+280 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
 release minification and APK packaging.
 
 The capture *logic* is covered — coverage accumulation, guidance priority and

@@ -11,6 +11,7 @@
 #include "parallax/floorplan/PlaneDetection.h"
 #include "parallax/io/ImageIo.h"
 #include "parallax/io/JpegIo.h"
+#include "parallax/depth/MultiViewStereo.h"
 #include "parallax/io/Json.h"
 #include "parallax/io/MeshReader.h"
 #include "parallax/sfm/BundleAdjustment.h"
@@ -22,6 +23,20 @@
 namespace parallax {
 namespace fs = std::filesystem;
 namespace {
+
+/// Neighbouring views matched per reference frame during depth estimation.
+constexpr int kMvsNeighbourCount = 4;
+
+/// Depth-sweep resolution and sample count. Cost is quadratic in the first and
+/// linear in the second, so the coarse pair is what a Fast scan uses.
+constexpr int kMvsDownscale = 2;
+constexpr int kMvsSamples = 48;
+constexpr int kMvsFastDownscale = 3;
+constexpr int kMvsFastSamples = 32;
+
+/// Above this voxel size there is no point estimating depth finely: the volume
+/// cannot represent the detail.
+constexpr float kCoarseVoxelSizeM = 0.012f;
 
 /// One frame as described by the manifest the capture layer writes.
 struct FrameRecord {
@@ -79,6 +94,36 @@ bool readDepthRaw(const std::string& path, DepthMap* out) {
     std::memcpy(out->confidence.data(), bytes.data() + expected, out->confidence.size());
   }
   return true;
+}
+
+/// Write a depth map in the same format `readDepthRaw` reads: width, height,
+/// then the samples in metres, then one confidence byte each.
+bool writeDepthRaw(const std::string& path, const DepthMap& depth) {
+  if (depth.empty()) return false;
+  const size_t samples = static_cast<size_t>(depth.width) * depth.height;
+  std::vector<uint8_t> bytes(8 + samples * sizeof(float) + samples);
+  const int32_t width = depth.width;
+  const int32_t height = depth.height;
+  std::memcpy(bytes.data(), &width, 4);
+  std::memcpy(bytes.data() + 4, &height, 4);
+  std::memcpy(bytes.data() + 8, depth.depth.data(), samples * sizeof(float));
+  if (depth.confidence.size() == samples) {
+    std::memcpy(bytes.data() + 8 + samples * sizeof(float), depth.confidence.data(), samples);
+  } else {
+    // No confidence means "fully trusted", which is what an absent array means
+    // to `DepthMap::conf` as well.
+    std::fill(bytes.begin() + 8 + samples * sizeof(float), bytes.end(), uint8_t{255});
+  }
+  return writeFileBytes(path, bytes);
+}
+
+/// The depth file an estimated frame is written to. `.mvs` rather than `.depth`
+/// so an estimate is distinguishable from a sensor measurement on disk, which
+/// matters when diagnosing a bad reconstruction from a pulled project directory.
+std::string depthFileNameFor(int frame_index) {
+  char name[32];
+  std::snprintf(name, sizeof(name), "%06d.mvs", frame_index);
+  return std::string(name);
 }
 
 Pose poseFromColumnMajor(const Json& array) {
@@ -342,7 +387,13 @@ struct Pipeline::Impl {
   StageOutcome runFinalise(const ProgressCallback& progress, const CancelToken& cancel);
 
   /// Refined poses, written by the pose stage and read by everything after it.
-  bool loadRefinedPoses(std::vector<int>* keyframes, std::vector<Pose>* poses);
+  bool loadRefinedPoses(std::vector<int>* keyframes, std::vector<Pose>* poses,
+                        std::vector<Vec3>* sparse_points = nullptr);
+
+  int estimateMissingDepth(const std::vector<int>& keyframes, const std::vector<Pose>& poses,
+                           const std::vector<Vec3>& sparse_points,
+                           const std::vector<uint8_t>& has_depth,
+                           const ProgressCallback& progress, const CancelToken& cancel);
 
   /**
    * The rotation mesh cleanup applied to level the model against gravity.
@@ -398,7 +449,8 @@ void Pipeline::Impl::saveLevelRotation(const Mat3& rotation) const {
 
 // ---------------------------------------------------------------------- stages
 
-bool Pipeline::Impl::loadRefinedPoses(std::vector<int>* keyframes, std::vector<Pose>* poses) {
+bool Pipeline::Impl::loadRefinedPoses(std::vector<int>* keyframes, std::vector<Pose>* poses,
+                                      std::vector<Vec3>* sparse_points) {
   std::string text;
   if (!readFileText(checkpointPath(Stage::PoseRefinement).string(), &text)) return false;
   Json json;
@@ -414,6 +466,18 @@ bool Pipeline::Impl::loadRefinedPoses(std::vector<int>* keyframes, std::vector<P
     if (index < 0 || index >= static_cast<int>(frames.size())) return false;
     keyframes->push_back(index);
     poses->push_back(poseFromColumnMajor(entry.get("pose")));
+  }
+  if (sparse_points != nullptr) {
+    sparse_points->clear();
+    const Json& points = json.get("points");
+    if (points.isArray()) {
+      for (size_t i = 0; i < points.size(); ++i) {
+        const Json& entry = points.at(i);
+        if (!entry.isArray() || entry.size() < 3) continue;
+        sparse_points->push_back(Vec3(entry.at(0).asDouble(), entry.at(1).asDouble(),
+                                      entry.at(2).asDouble()));
+      }
+    }
   }
   summary.scale_factor = json.get("scale_factor").asDouble(1.0);
   return true;
@@ -969,6 +1033,21 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
     list.push(std::move(entry));
   }
   json.set("keyframes", std::move(list));
+
+  // The triangulated points are persisted too. The depth stage uses them to
+  // size its sweep: a fixed 0.25-6 m range over a 30 cm object spends 95% of
+  // its samples on empty space, and these points are the only thing that knows
+  // how far away the subject actually is.
+  Json points = Json::array();
+  for (const Vec3& point : problem.points) {
+    Json entry = Json::array();
+    entry.push(Json::number(point.x()));
+    entry.push(Json::number(point.y()));
+    entry.push(Json::number(point.z()));
+    points.push(std::move(entry));
+  }
+  json.set("points", std::move(points));
+
   if (!writeFileText(checkpointPath(Stage::PoseRefinement).string(), json.dump(2))) {
     return StageOutcome{false, false, "could not write the pose checkpoint"};
   }
@@ -987,36 +1066,164 @@ StageOutcome Pipeline::Impl::runDepth(const ProgressCallback& progress,
   if (!loadFrames()) return StageOutcome{false, false, "frames unavailable"};
   std::vector<int> keyframes;
   std::vector<Pose> poses;
-  if (!loadRefinedPoses(&keyframes, &poses)) {
+  std::vector<Vec3> sparse_points;
+  if (!loadRefinedPoses(&keyframes, &poses, &sparse_points)) {
     return StageOutcome{false, false, "refined poses are missing; re-run pose refinement"};
   }
 
-  // Count how many keyframes actually have a depth map. The capture layer writes sensor depth,
-  // and the Kotlin layer writes monocular network depth into the same directory, so from here
-  // the two are indistinguishable by design.
+  // Which keyframes already have a depth map. The capture layer writes sensor
+  // depth and the Kotlin ML layer writes monocular network depth into the same
+  // directory, so from here the two are indistinguishable by design.
+  std::vector<uint8_t> has_depth(keyframes.size(), 0);
   int with_depth = 0;
   for (size_t i = 0; i < keyframes.size(); ++i) {
     if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
     DepthMap depth;
-    if (loadDepth(frames[keyframes[i]], &depth) && !depth.empty()) ++with_depth;
-    report(progress, Stage::Depth, static_cast<double>(i + 1) / keyframes.size(),
-           "Checking depth maps");
+    if (loadDepth(frames[keyframes[i]], &depth) && !depth.empty()) {
+      has_depth[i] = 1;
+      ++with_depth;
+    }
   }
+  report(progress, Stage::Depth, 0.05, "Checking depth maps");
+
+  int estimated = 0;
+  if (with_depth < static_cast<int>(keyframes.size())) {
+    estimated = estimateMissingDepth(keyframes, poses, sparse_points, has_depth, progress,
+                                     cancel);
+    if (estimated < 0) return StageOutcome{false, true, "cancelled"};
+    with_depth += estimated;
+  }
+
   if (with_depth == 0) {
     return StageOutcome{
         false, false,
-        "no depth maps were available; fusion needs either sensor depth or estimated depth"};
+        "depth could not be measured or estimated for any frame; the capture may have too "
+        "little overlap or too little texture"};
   }
 
   Json json = Json::object();
   json.set("keyframes_with_depth", Json::integer(with_depth));
+  json.set("keyframes_estimated", Json::integer(estimated));
   json.set("keyframes", Json::integer(static_cast<int64_t>(keyframes.size())));
   if (!writeFileText(checkpointPath(Stage::Depth).string(), json.dump(2))) {
     return StageOutcome{false, false, "could not write the depth checkpoint"};
   }
-  return StageOutcome{true, false,
-                      std::to_string(with_depth) + " of " + std::to_string(keyframes.size()) +
-                          " keyframes have depth"};
+
+  std::string detail = std::to_string(with_depth) + " of " +
+                       std::to_string(keyframes.size()) + " keyframes have depth";
+  if (estimated > 0) {
+    detail += " (" + std::to_string(estimated) + " estimated from the images)";
+  }
+  return StageOutcome{true, false, detail};
+}
+
+/**
+ * Fill in depth for the keyframes that do not have it, by multi-view stereo.
+ *
+ * This is what lets a phone with no depth sensor -- and no monocular depth
+ * model, which is an optional asset -- reconstruct at all. The estimates are
+ * written into `depth/` in the same raw float format the capture layer uses, so
+ * every later stage is oblivious to where a depth map came from.
+ *
+ * @return the number of frames estimated, or -1 if cancelled.
+ */
+int Pipeline::Impl::estimateMissingDepth(const std::vector<int>& keyframes,
+                                         const std::vector<Pose>& poses,
+                                         const std::vector<Vec3>& sparse_points,
+                                         const std::vector<uint8_t>& has_depth,
+                                         const ProgressCallback& progress,
+                                         const CancelToken& cancel) {
+  // Images are loaded once and held as greyscale for the whole stage. A
+  // keyframe is a reference for its own estimate and a neighbour for several
+  // others, so re-decoding per use would decode each frame five times.
+  report(progress, Stage::Depth, 0.1, "Loading frames for depth estimation");
+  std::vector<GrayBuffer> grays(keyframes.size());
+  std::vector<MvsView> views(keyframes.size());
+  for (size_t i = 0; i < keyframes.size(); ++i) {
+    if (checkCancel(cancel)) return -1;
+    ColorBuffer color;
+    if (!loadImage(frames[keyframes[i]], &color) || color.empty()) continue;
+    grays[i] = toGray(color);
+    views[i].gray = &grays[i];
+    views[i].pose = poses[i];
+    views[i].intrinsics =
+        frames[keyframes[i]].intrinsics.scaledTo(color.width, color.height);
+  }
+
+  // A representative scene depth, for choosing neighbours. Taken from the
+  // sparse points where they exist, and from the camera path's own extent
+  // otherwise -- an orbit's radius is the right order of magnitude for what it
+  // is orbiting.
+  double scene_depth = 1.0;
+  if (!sparse_points.empty()) {
+    double sum = 0.0;
+    int count = 0;
+    for (size_t i = 0; i < views.size(); ++i) {
+      if (views[i].gray == nullptr) continue;
+      for (const Vec3& point : sparse_points) {
+        const Vec3 in_camera = poses[i] * point;
+        if (in_camera.z() > 0.0) {
+          sum += in_camera.z();
+          ++count;
+        }
+      }
+      if (count > 2000) break;
+    }
+    if (count > 0) scene_depth = sum / count;
+  }
+
+  int estimated = 0;
+  int attempted = 0;
+  for (size_t i = 0; i < keyframes.size(); ++i) {
+    if (has_depth[i] || views[i].gray == nullptr) continue;
+    if (checkCancel(cancel)) return -1;
+    ++attempted;
+
+    const std::vector<int> neighbour_indices =
+        selectNeighbours(views, static_cast<int>(i), kMvsNeighbourCount, scene_depth);
+    if (neighbour_indices.empty()) continue;
+    std::vector<MvsView> neighbours;
+    neighbours.reserve(neighbour_indices.size());
+    for (int index : neighbour_indices) neighbours.push_back(views[index]);
+
+    MvsConfig mvs;
+    mvs.neighbour_count = kMvsNeighbourCount;
+    // The sweep's cost is linear in the sample count and quadratic in the
+    // resolution, so the quality preset's voxel size -- which is what the user
+    // actually chose -- drives both. There is no point estimating depth more
+    // finely than the volume can represent.
+    const bool coarse = config.voxel_size >= kCoarseVoxelSizeM;
+    mvs.downscale = coarse ? kMvsFastDownscale : kMvsDownscale;
+    mvs.depth_samples = coarse ? kMvsFastSamples : kMvsSamples;
+    if (!depthRangeFromPoints(sparse_points, poses[i], views[i].intrinsics, &mvs.min_depth,
+                              &mvs.max_depth)) {
+      // No usable sparse points for this view: sweep a range around the scene
+      // depth rather than the whole 0.25-6 m default, which would spend most
+      // of its samples nowhere near the surface.
+      mvs.min_depth = std::max(0.2, scene_depth * 0.35);
+      mvs.max_depth = std::max(mvs.min_depth + 0.3, scene_depth * 2.5);
+    }
+    mvs.max_depth = std::min(mvs.max_depth,
+                             static_cast<double>(config.max_integration_depth) * 1.5);
+
+    const DepthMap depth = estimateDepth(views[i], neighbours, mvs);
+    if (depth.empty()) continue;
+
+    // Written at the same resolution the estimate produced; the intrinsics in
+    // the manifest are at the frame's resolution, and every consumer rescales
+    // them to the depth map it is handed.
+    const std::string name = depthFileNameFor(keyframes[i]);
+    if (writeDepthRaw((projectDir() / "depth" / name).string(), depth)) {
+      frames[keyframes[i]].depth_file = name;
+      ++estimated;
+    }
+
+    const double fraction = 0.15 + 0.8 * (attempted / static_cast<double>(keyframes.size()));
+    report(progress, Stage::Depth, std::min(0.95, fraction),
+           "Estimating depth " + std::to_string(estimated) + "/" +
+               std::to_string(keyframes.size()));
+  }
+  return estimated;
 }
 
 StageOutcome Pipeline::Impl::runFusion(const ProgressCallback& progress,

@@ -58,10 +58,15 @@ class SyntheticCapture {
     scene.primitives.push_back(floor);
 
     const CameraIntrinsics k = phoneIntrinsics(resolution, resolution, 62.0);
-    Json frames = Json::array();
-    const std::vector<Pose> poses =
-        SyntheticScene::orbitPoses(ball.center, 0.75, 0.22, views);
+    writeCapture(scene, k, SyntheticScene::orbitPoses(ball.center, 0.75, 0.22, views),
+                 with_poses, with_depth);
+  }
 
+  /// Render an arbitrary scene from arbitrary poses and write the manifest.
+  void writeCapture(const SyntheticScene& scene, const CameraIntrinsics& k,
+                    const std::vector<Pose>& poses, bool with_poses = true,
+                    bool with_depth = true) {
+    Json frames = Json::array();
     for (size_t i = 0; i < poses.size(); ++i) {
       const RenderResult frame = scene.render(k, poses[i], true, with_depth);
       char name[64];
@@ -111,6 +116,19 @@ class SyntheticCapture {
     manifest.set("version", Json::integer(1));
     manifest.set("frames", std::move(frames));
     ASSERT_TRUE(writeFileText((dir_ / "manifest.json").string(), manifest.dump(2)));
+  }
+
+  /// True when any file in `depth/` ends with `suffix`.
+  bool hasDepthFileMatching(const std::string& suffix) const {
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(dir_ / "depth", ec)) {
+      const std::string name = entry.path().filename().string();
+      if (name.size() >= suffix.size() &&
+          name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool hasCheckpoint(const std::string& name) const {
@@ -386,12 +404,67 @@ TEST(Pipeline, RunsStructureFromMotionWhenThereAreNoDevicePoses) {
   EXPECT_EQ(pipeline.summary().scale_factor, 0.0);
 }
 
-TEST(Pipeline, FailsWithAClearMessageWhenThereIsNoDepth) {
+/**
+ * A capture with no depth maps at all still reconstructs.
+ *
+ * This is the path every device without a depth sensor takes -- and, since the
+ * monocular depth model is an optional asset, the path most devices take. The
+ * depth stage estimates depth from the images and the refined poses by
+ * multi-view stereo, and writes it into `depth/` so that fusion and texturing
+ * cannot tell the difference.
+ */
+TEST(Pipeline, EstimatesDepthFromTheImagesWhenThereIsNone) {
   SyntheticCapture capture;
-  capture.writeObjectCapture(8, 128, /*with_poses=*/true, /*with_depth=*/false);
+  capture.writeObjectCapture(12, 160, /*with_poses=*/true, /*with_depth=*/false);
   Pipeline pipeline(objectConfig(capture.path()));
   ASSERT_TRUE(pipeline.runStage(Stage::Ingest, nullptr, nullptr).success);
   ASSERT_TRUE(pipeline.runStage(Stage::PoseRefinement, nullptr, nullptr).success);
+
+  const StageOutcome outcome = pipeline.runStage(Stage::Depth, nullptr, nullptr);
+  ASSERT_TRUE(outcome.success) << outcome.message;
+  EXPECT_NE(outcome.message.find("estimated"), std::string::npos) << outcome.message;
+
+  // The estimates are on disk under their own extension, so an estimate is
+  // distinguishable from a sensor measurement when diagnosing a bad scan.
+  EXPECT_TRUE(capture.hasDepthFileMatching(".mvs"));
+}
+
+/// And the whole pipeline runs through on those estimates, which is the claim
+/// that actually matters: a model comes out the other end.
+TEST(Pipeline, RunsToCompletionOnEstimatedDepth) {
+  SyntheticCapture capture;
+  capture.writeObjectCapture(16, 160, /*with_poses=*/true, /*with_depth=*/false);
+  Pipeline pipeline(objectConfig(capture.path()));
+
+  const StageOutcome outcome = pipeline.runToCompletion(nullptr, nullptr);
+  ASSERT_TRUE(outcome.success) << outcome.message;
+  EXPECT_TRUE(capture.hasOutput("model.glb"));
+
+  const PipelineSummary& summary = pipeline.summary();
+  EXPECT_GT(summary.triangle_count, 100);
+  // Metric scale survives: the depth came from triangulating the real poses,
+  // so the model is in metres just as a sensor-depth scan would be.
+  EXPECT_GT(summary.bounds.diagonal(), 0.15);
+  EXPECT_LT(summary.bounds.diagonal(), 6.0);
+}
+
+/// With no poses *and* no depth there is nothing to triangulate from, and the
+/// failure has to say so rather than producing an empty model.
+TEST(Pipeline, FailsWithAClearMessageWhenDepthCannotBeEstimated) {
+  SyntheticCapture capture;
+  // Two frames from almost the same position: no baseline, so no depth is
+  // recoverable from them however good the images are.
+  {
+    SyntheticScene scene = SyntheticScene::objectOnTable();
+    const CameraIntrinsics intrinsics = phoneIntrinsics(160, 120);
+    std::vector<Pose> poses;
+    poses.push_back(SyntheticScene::lookAt(Vec3(0, 0.4, -1.0), Vec3(0, 0.3, 0)));
+    poses.push_back(SyntheticScene::lookAt(Vec3(0, 0.4, -1.0), Vec3(0, 0.3, 0)));
+    capture.writeCapture(scene, intrinsics, poses, /*with_poses=*/true, /*with_depth=*/false);
+  }
+  Pipeline pipeline(objectConfig(capture.path()));
+  ASSERT_TRUE(pipeline.runStage(Stage::Ingest, nullptr, nullptr).success);
+  pipeline.runStage(Stage::PoseRefinement, nullptr, nullptr);
 
   const StageOutcome outcome = pipeline.runStage(Stage::Depth, nullptr, nullptr);
   EXPECT_FALSE(outcome.success);

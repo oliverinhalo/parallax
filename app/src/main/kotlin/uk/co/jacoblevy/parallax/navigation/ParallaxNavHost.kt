@@ -6,13 +6,16 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.navigation.compose.rememberNavController
 import uk.co.jacoblevy.parallax.feature.capture.ui.CaptureRoute
 import uk.co.jacoblevy.parallax.feature.library.LibraryRoute
+import uk.co.jacoblevy.parallax.feature.processing.ProcessingRoute
 import uk.co.jacoblevy.parallax.feature.onboarding.OnboardingRoute
 import uk.co.jacoblevy.parallax.feature.settings.LicencesRoute
 import uk.co.jacoblevy.parallax.feature.settings.SettingsRoute
@@ -58,11 +61,24 @@ fun ParallaxNavHost(
         }
 
         composable<ParallaxRoute.Library> {
+            val launcher: ProjectLauncherViewModel = hiltViewModel()
+            LaunchedEffect(launcher) {
+                launcher.destinations.collect { destination ->
+                    when (destination) {
+                        is ProjectDestination.Viewer -> Unit // wired when the viewer lands
+                        ProjectDestination.Processing ->
+                            navController.navigate(ParallaxRoute.Processing)
+                        is ProjectDestination.ResumeCapture ->
+                            navController.navigate(ParallaxRoute.Capture)
+                        is ProjectDestination.Failed -> Unit // surfaced by the library's state
+                    }
+                }
+            }
             LibraryRoute(
-                onOpenProject = { /* wired when the viewer lands */ },
+                onOpenProject = launcher::open,
                 onStartCapture = { navController.navigate(ParallaxRoute.Capture) },
                 onOpenSettings = { navController.navigate(ParallaxRoute.Settings) },
-                onOpenQueue = { /* wired when processing lands */ },
+                onOpenQueue = { navController.navigate(ParallaxRoute.Processing) },
             )
         }
 
@@ -71,12 +87,22 @@ fun ParallaxNavHost(
                 // A finished capture goes back to the library, which shows the new scan with
                 // its "not processed" badge. Popping capture off the stack matters: pressing
                 // back from the library must not reopen the camera on a finished scan.
+                // A finished capture goes straight to the queue, which is where the
+                // progress is: bouncing back to the library would make the user hunt for
+                // the scan they just took.
                 onFinished = {
-                    navController.navigate(ParallaxRoute.Library) {
-                        popUpTo(ParallaxRoute.Library) { inclusive = true }
+                    navController.navigate(ParallaxRoute.Processing) {
+                        popUpTo(ParallaxRoute.Library)
                     }
                 },
                 onCancelled = navController::popBackStack,
+            )
+        }
+
+        composable<ParallaxRoute.Processing> {
+            ProcessingRoute(
+                onBack = navController::popBackStack,
+                onOpenProject = { /* wired when the viewer lands */ },
             )
         }
 

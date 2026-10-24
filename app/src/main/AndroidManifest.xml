@@ -80,6 +80,23 @@
             </intent-filter>
         </activity>
 
+        <!--
+          WorkManager is initialised on demand, because the application class
+          supplies Hilt's worker factory through Configuration.Provider. Leaving
+          the default initializer in place would construct the reconstruction
+          worker reflectively and fail at runtime with no injected dependencies.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
