@@ -1,0 +1,74 @@
+#version 450
+
+// Second stage of SSIM: the similarity map itself, and the partial
+// derivatives of each window's score with respect to the statistics it was
+// built from. Those partials are then blurred again, which is the chain rule
+// for a symmetric kernel. Mirrors meanSsim() in src/splat/SplatRaster.cpp.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Blurred { float blurred[]; };
+layout(set = 0, binding = 1, std430) writeonly buffer Terms { float term[]; };
+layout(set = 0, binding = 2, std430) buffer Totals { uint total[]; };
+
+layout(push_constant) uniform Push {
+  uint pixel_count;
+  float scale;      ///< 1 / (pixels * 3), so the planes sum to the mean SSIM
+  uint total_slot;
+  uint want_gradient;
+} push;
+
+#define SSIM_C1 0.0001
+#define SSIM_C2 0.0009
+
+shared float partial[256];
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  uint thread = gl_LocalInvocationID.x;
+  uint pixels = push.pixel_count;
+
+  float similarity = 0.0;
+  if (i < pixels) {
+    float mu_x = blurred[0u * pixels + i];
+    float mu_y = blurred[1u * pixels + i];
+    float var_x = blurred[2u * pixels + i] - mu_x * mu_x;
+    float var_y = blurred[3u * pixels + i] - mu_y * mu_y;
+    float covariance = blurred[4u * pixels + i] - mu_x * mu_y;
+
+    float a = 2.0 * mu_x * mu_y + SSIM_C1;
+    float b = 2.0 * covariance + SSIM_C2;
+    float c = mu_x * mu_x + mu_y * mu_y + SSIM_C1;
+    float d = var_x + var_y + SSIM_C2;
+    similarity = (a * b) / (c * d) * push.scale;
+
+    if (push.want_gradient != 0u) {
+      float term_mu = push.scale * (2.0 * mu_y * b / (c * d) - 2.0 * mu_x * a * b / (c * c * d));
+      float term_var = push.scale * (-(a * b) / (c * d * d));
+      float term_cov = push.scale * (2.0 * a / (c * d));
+      term[0u * pixels + i] = term_mu;
+      term[1u * pixels + i] = term_var;
+      term[2u * pixels + i] = term_cov;
+      term[3u * pixels + i] = term_var * mu_x;
+      term[4u * pixels + i] = term_cov * mu_y;
+    }
+  }
+
+  partial[thread] = similarity;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (thread < stride) partial[thread] += partial[thread + stride];
+    barrier();
+  }
+  if (thread != 0u) return;
+
+  uint slot = push.total_slot;
+  uint expected = total[slot];
+  uint desired = floatBitsToUint(uintBitsToFloat(expected) + partial[0]);
+  uint previous = atomicCompSwap(total[slot], expected, desired);
+  while (previous != expected) {
+    expected = previous;
+    desired = floatBitsToUint(uintBitsToFloat(expected) + partial[0]);
+    previous = atomicCompSwap(total[slot], expected, desired);
+  }
+}

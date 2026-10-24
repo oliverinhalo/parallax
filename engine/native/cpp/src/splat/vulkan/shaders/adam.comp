@@ -1,0 +1,90 @@
+#version 450
+
+// The optimiser step. One invocation per gaussian updates all of its
+// parameters, so the moment buffers are read and written exactly once.
+// Mirrors SplatTrainer::Impl::applyGradients().
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) buffer Positions { float position[]; };
+layout(set = 0, binding = 1, std430) buffer LogScales { float log_scale[]; };
+layout(set = 0, binding = 2, std430) buffer Rotations { float rotation[]; };
+layout(set = 0, binding = 3, std430) buffer Opacities { float opacity_logit[]; };
+layout(set = 0, binding = 4, std430) buffer DcTerms { float dc[]; };
+layout(set = 0, binding = 5, std430) buffer ShRest { float sh_rest[]; };
+layout(set = 0, binding = 6, std430) readonly buffer GradPosition { float grad_position[]; };
+layout(set = 0, binding = 7, std430) readonly buffer GradLogScale { float grad_log_scale[]; };
+layout(set = 0, binding = 8, std430) readonly buffer GradRotation { float grad_rotation[]; };
+layout(set = 0, binding = 9, std430) readonly buffer GradOpacity { float grad_opacity[]; };
+layout(set = 0, binding = 10, std430) readonly buffer GradDc { float grad_dc[]; };
+layout(set = 0, binding = 11, std430) readonly buffer GradShRest { float grad_sh_rest[]; };
+layout(set = 0, binding = 12, std430) buffer Moments { float moment[]; };
+
+layout(push_constant) uniform Push {
+  float lr_position;
+  float lr_scale;
+  float lr_rotation;
+  float lr_opacity;
+  float lr_dc;
+  float lr_sh_rest;
+  float beta1;
+  float beta2;
+  float epsilon;
+  float correction1;
+  float correction2;
+  uint count;
+  uint rest_stride;
+  /// Where each group's moments start, in float pairs: position, log_scale,
+  /// rotation, opacity, dc, sh_rest. One buffer keeps the binding count down.
+  uint moment_base_position;
+  uint moment_base_log_scale;
+  uint moment_base_rotation;
+  uint moment_base_opacity;
+  uint moment_base_dc;
+  uint moment_base_sh_rest;
+} push;
+
+/// Adam, with the moments interleaved as (first, second) so one slot is one
+/// cache line's worth of the state a parameter needs.
+float adamDelta(uint slot, float gradient, float learning_rate) {
+  float first = push.beta1 * moment[slot * 2u] + (1.0 - push.beta1) * gradient;
+  float second = push.beta2 * moment[slot * 2u + 1u] + (1.0 - push.beta2) * gradient * gradient;
+  moment[slot * 2u] = first;
+  moment[slot * 2u + 1u] = second;
+  float first_hat = first / push.correction1;
+  float second_hat = second / push.correction2;
+  return -learning_rate * first_hat / (sqrt(second_hat) + push.epsilon);
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= push.count) return;
+
+  for (uint a = 0u; a < 3u; ++a) {
+    uint k = i * 3u + a;
+    position[k] += adamDelta(push.moment_base_position + k, grad_position[k], push.lr_position);
+    log_scale[k] += adamDelta(push.moment_base_log_scale + k, grad_log_scale[k], push.lr_scale);
+    dc[k] += adamDelta(push.moment_base_dc + k, grad_dc[k], push.lr_dc);
+  }
+
+  opacity_logit[i] +=
+      adamDelta(push.moment_base_opacity + i, grad_opacity[i], push.lr_opacity);
+
+  vec4 q;
+  for (uint a = 0u; a < 4u; ++a) {
+    uint k = i * 4u + a;
+    rotation[k] += adamDelta(push.moment_base_rotation + k, grad_rotation[k], push.lr_rotation);
+    q[a] = rotation[k];
+  }
+  // Re-normalising every step keeps the moments meaningful; letting the norm
+  // drift makes the effective learning rate drift with it.
+  float norm = length(q);
+  q = norm > 1e-6 ? q / norm : vec4(1.0, 0.0, 0.0, 0.0);
+  for (uint a = 0u; a < 4u; ++a) rotation[i * 4u + a] = q[a];
+
+  for (uint k = 0u; k < push.rest_stride; ++k) {
+    uint index = i * push.rest_stride + k;
+    sh_rest[index] +=
+        adamDelta(push.moment_base_sh_rest + index, grad_sh_rest[index], push.lr_sh_rest);
+  }
+}

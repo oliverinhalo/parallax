@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The parallax motif.
+
+  Two offset outlines of the same cube. Parallax is the apparent displacement of
+  a thing seen from two positions, and that is exactly what the pair draws: the
+  near copy in the signature cyan, the far copy ghosted behind it, with the
+  offset itself as the subject. The shapes stay inside the adaptive icon's
+  66dp safe zone (centred, 72dp of the 108dp canvas) so no launcher mask clips
+  the geometry.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- The displaced copy: the same cube, seen from the other eye. -->
+    <group android:translateX="-5.5" android:translateY="3">
+        <path
+            android:pathData="M54,30 L72,40 L72,62 L54,72 L36,62 L36,40 Z"
+            android:strokeColor="#3DE0FF"
+            android:strokeAlpha="0.32"
+            android:strokeWidth="3"
+            android:strokeLineJoin="round"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M36,40 L54,50 L72,40 M54,50 L54,72"
+            android:strokeColor="#3DE0FF"
+            android:strokeAlpha="0.32"
+            android:strokeWidth="3"
+            android:strokeLineJoin="round"
+            android:strokeLineCap="round" />
+    </group>
+
+    <!-- The near copy. -->
+    <group android:translateX="5.5" android:translateY="-3">
+        <path
+            android:pathData="M54,30 L72,40 L72,62 L54,72 L36,62 L36,40 Z"
+            android:strokeColor="#3DE0FF"
+            android:strokeWidth="4"
+            android:strokeLineJoin="round"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M36,40 L54,50 L72,40 M54,50 L54,72"
+            android:strokeColor="#3DE0FF"
+            android:strokeWidth="4"
+            android:strokeLineJoin="round"
+            android:strokeLineCap="round" />
+    </group>
+</vector>

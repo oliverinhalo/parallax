@@ -1,0 +1,131 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Projects every gaussian into the current view: 2D mean, 2D covariance and
+// its inverse, depth, tile-culling radius, colour and opacity. One invocation
+// per gaussian. Mirrors projectSplats() in src/splat/SplatRaster.cpp.
+
+#include "common.glsl"
+#include "params.glsl"
+#include "sh.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 1, std430) readonly buffer Positions { float position[]; };
+layout(set = 0, binding = 2, std430) readonly buffer LogScales { float log_scale[]; };
+layout(set = 0, binding = 3, std430) readonly buffer Rotations { float rotation[]; };
+layout(set = 0, binding = 4, std430) readonly buffer Opacities { float opacity_logit[]; };
+layout(set = 0, binding = 5, std430) readonly buffer DcTerms { float dc[]; };
+layout(set = 0, binding = 6, std430) readonly buffer ShRest { float sh_rest[]; };
+layout(set = 0, binding = 7, std430) writeonly buffer Projected { float proj[]; };
+layout(set = 0, binding = 8, std430) writeonly buffer Meta { uint meta[]; };
+layout(set = 0, binding = 9, std430) writeonly buffer TileCounts { uint tile_count[]; };
+
+void clearSlot(uint i) {
+  for (int k = 0; k < PROJ_STRIDE; ++k) proj[i * PROJ_STRIDE + k] = 0.0;
+  meta[i * META_STRIDE + META_FLAGS] = 0u;
+  tile_count[i] = 0u;
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= uint(GAUSSIAN_COUNT)) return;
+
+  vec3 world = vec3(position[i * 3u], position[i * 3u + 1u], position[i * 3u + 2u]);
+  mat3 W = viewRotation();
+  vec3 p_cam = W * world + viewTranslation();
+  if (p_cam.z < 0.01) {
+    clearSlot(i);
+    return;
+  }
+
+  float tan_half_x = 0.5 * float(VIEW_WIDTH) / VIEW_FX;
+  float tan_half_y = 0.5 * float(VIEW_HEIGHT) / VIEW_FY;
+  float limit_x = tan_half_x * FRUSTUM_SLACK;
+  float limit_y = tan_half_y * FRUSTUM_SLACK;
+  float jx = clamp(p_cam.x / p_cam.z, -limit_x, limit_x) * p_cam.z;
+  float jy = clamp(p_cam.y / p_cam.z, -limit_y, limit_y) * p_cam.z;
+  float z = p_cam.z;
+
+  mat3x2 J = mat3x2(vec2(VIEW_FX / z, 0.0), vec2(0.0, VIEW_FY / z),
+                    vec2(-VIEW_FX * jx / (z * z), -VIEW_FY * jy / (z * z)));
+  mat3x2 T = J * W;
+
+  vec3 scale = exp(vec3(log_scale[i * 3u], log_scale[i * 3u + 1u], log_scale[i * 3u + 2u]));
+  vec4 q = normalize(vec4(rotation[i * 4u], rotation[i * 4u + 1u], rotation[i * 4u + 2u],
+                          rotation[i * 4u + 3u]));
+  mat3 R = quaternionToMatrix(q);
+  mat3 M = R * mat3(scale.x, 0.0, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, scale.z);
+  mat3 sigma = M * transpose(M);
+
+  mat2 cov = T * sigma * transpose(T);
+  cov[0][0] += SCREEN_DILATION;
+  cov[1][1] += SCREEN_DILATION;
+
+  float det = cov[0][0] * cov[1][1] - cov[0][1] * cov[1][0];
+  float opacity = 1.0 / (1.0 + exp(-opacity_logit[i]));
+  if (det <= 1e-12 || opacity < MIN_ALPHA) {
+    clearSlot(i);
+    return;
+  }
+
+  vec2 mean = vec2(VIEW_FX * p_cam.x / z + VIEW_CX, VIEW_FY * p_cam.y / z + VIEW_CY);
+  float mid = 0.5 * (cov[0][0] + cov[1][1]);
+  float spread = sqrt(max(0.0, mid * mid - det));
+  float radius = 3.0 * sqrt(max(mid + spread, 1e-6));
+
+  if (mean.x + radius < 0.0 || mean.x - radius >= float(VIEW_WIDTH) ||
+      mean.y + radius < 0.0 || mean.y - radius >= float(VIEW_HEIGHT)) {
+    clearSlot(i);
+    return;
+  }
+
+  // Colour from the spherical harmonics along the view direction.
+  vec3 direction = normalize(world - params.camera_center.xyz);
+  float basis[15];
+  int basis_count = shBasis(SH_DEGREE, direction, basis);
+  int per_channel = SH_REST_STRIDE / 3;
+  int usable = min(basis_count, per_channel);
+  vec3 color = vec3(0.5) + float(SH_C0) * vec3(dc[i * 3u], dc[i * 3u + 1u], dc[i * 3u + 2u]);
+  for (int c = 0; c < 3; ++c) {
+    uint base = i * uint(SH_REST_STRIDE) + uint(c * per_channel);
+    float sum = 0.0;
+    for (int b = 0; b < usable; ++b) sum += basis[b] * sh_rest[base + uint(b)];
+    color[c] += sum;
+  }
+
+  uint flags = FLAG_VISIBLE;
+  for (int c = 0; c < 3; ++c) {
+    if (color[c] < 0.0) {
+      color[c] = 0.0;
+      flags |= (2u << uint(c));
+    }
+  }
+
+  int x0 = max(0, int(floor((mean.x - radius) / float(TILE_SIZE))));
+  int x1 = min(TILE_COLS - 1, int(floor((mean.x + radius) / float(TILE_SIZE))));
+  int y0 = max(0, int(floor((mean.y - radius) / float(TILE_SIZE))));
+  int y1 = min(TILE_ROWS - 1, int(floor((mean.y + radius) / float(TILE_SIZE))));
+  uint tiles = uint(max(0, x1 - x0 + 1) * max(0, y1 - y0 + 1));
+
+  uint base = i * PROJ_STRIDE;
+  proj[base + PROJ_MEAN_X] = mean.x;
+  proj[base + PROJ_MEAN_Y] = mean.y;
+  proj[base + PROJ_COV_XX] = cov[0][0];
+  proj[base + PROJ_COV_XY] = cov[0][1];
+  proj[base + PROJ_COV_YY] = cov[1][1];
+  proj[base + PROJ_CONIC_X] = cov[1][1] / det;
+  proj[base + PROJ_CONIC_Y] = -cov[0][1] / det;
+  proj[base + PROJ_CONIC_Z] = cov[0][0] / det;
+  proj[base + PROJ_DEPTH] = z;
+  proj[base + PROJ_RADIUS] = radius;
+  proj[base + PROJ_COLOR_R] = color.r;
+  proj[base + PROJ_COLOR_G] = color.g;
+  proj[base + PROJ_COLOR_B] = color.b;
+  proj[base + PROJ_OPACITY] = opacity;
+  proj[base + 14] = 0.0;
+  proj[base + 15] = 0.0;
+
+  meta[i * META_STRIDE + META_FLAGS] = flags;
+  tile_count[i] = tiles;
+}

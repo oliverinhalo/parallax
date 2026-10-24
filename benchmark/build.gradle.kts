@@ -36,4 +36,5 @@ dependencies {
     implementation(libs.androidx.test.ext.junit)
     implementation(libs.androidx.espresso.core)
     implementation(libs.androidx.test.runner)
+    implementation(libs.androidx.test.uiautomator)
 }

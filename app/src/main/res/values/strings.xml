@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Parallax</string>
+    <string name="app_tagline">Capture the world in depth.</string>
+    <string name="crash_title">Parallax stopped unexpectedly</string>
+    <string name="crash_explanation">The details below say what went wrong. Nothing has been sent anywhere — share them if you want the problem fixed.</string>
+    <string name="crash_share">Share the details</string>
+</resources>

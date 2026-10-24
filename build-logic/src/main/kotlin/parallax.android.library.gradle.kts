@@ -30,6 +30,22 @@ extensions.configure<LibraryExtension> {
         unitTests {
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
+            // Robolectric reaches into JDK internals to emulate Android's file descriptors and
+            // shared memory. Without these exports every Robolectric test fails during
+            // application setup with "Failed to interact with raw FileDescriptor internals".
+            all { test ->
+                // Gradle 9 fails a test task that discovers nothing. AGP registers generated
+                // test sources (BuildConfig, KSP output) in every module, so the check fires on
+                // any module whose own tests are not written yet rather than only on a real
+                // misconfiguration. Coverage is enforced by the tests themselves, not by this.
+                test.failOnNoDiscoveredTests = false
+                test.jvmArgs(
+                    "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                )
+            }
         }
     }
 
@@ -47,9 +63,11 @@ extensions.configure<LibraryExtension> {
 
 kotlin {
     compilerOptions {
-        // `-Xjvm-default=all` lets interfaces carry default methods, which keeps
-        // the repository interfaces in :core:data free of abstract-member churn.
-        freeCompilerArgs.addAll("-Xjvm-default=all")
+        // Interface default methods are compiled into the interface rather than
+        // into synthetic DefaultImpls classes, which keeps the repository
+        // interfaces in :core:data free of abstract-member churn. The flag was
+        // renamed from -Xjvm-default in Kotlin 2.2.
+        freeCompilerArgs.addAll("-jvm-default=enable")
         allWarningsAsErrors = providers.gradleProperty("parallax.warningsAsErrors")
             .map(String::toBoolean).orElse(false)
     }

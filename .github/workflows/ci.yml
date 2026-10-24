@@ -1,0 +1,136 @@
+name: CI
+
+# Pull requests and the default branch. Nothing runs on tags: there is no
+# release pipeline yet, and a workflow that pretends to publish is worse than
+# one that does not exist.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # One run per branch. A force-push while CI is running should cancel the
+  # work it has just invalidated rather than queue behind it.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native engine (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ninja-build zlib1g-dev
+
+      - name: Configure
+        # The NDK on the runner is only needed for glslc, which compiles the
+        # Gaussian splat shaders. Everything else here is host-native.
+        run: |
+          cmake -S engine/native/cpp -B build-host -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DPARALLAX_BUILD_TESTS=ON \
+            -DPARALLAX_BUILD_TOOLS=ON
+
+      - name: Build
+        run: cmake --build build-host --parallel
+
+      - name: Test
+        run: ./build-host/parallax_tests --gtest_brief=1
+
+      - name: Benchmark
+        # Recorded rather than asserted on. A shared runner's timings are too
+        # noisy to fail a build over, but having them in the log of the run
+        # that changed them is how a tenfold regression gets noticed.
+        run: ./build-host/parallax_bench --runs 3 | tee build-host/bench.txt
+
+      - name: Upload benchmark numbers
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-benchmark
+          path: build-host/bench.txt
+          if-no-files-found: warn
+
+  android:
+    name: Android (build, tests, lint, detekt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Install the NDK and CMake the build asks for
+        # Pinned in gradle/libs.versions.toml, so the versions come from there
+        # rather than from whatever the runner image happens to ship.
+        run: |
+          NDK_VERSION=$(grep '^ndk = ' gradle/libs.versions.toml | cut -d'"' -f2)
+          CMAKE_VERSION=$(grep '^cmake = ' gradle/libs.versions.toml | cut -d'"' -f2)
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION"
+
+      - name: Build, test and check
+        # `build` covers assemble, unit tests, Android Lint and R8 on release;
+        # detekt is a separate task because it is not wired into `check`.
+        run: ./gradlew build detekt --no-daemon --stacktrace
+
+      - name: Upload the debug APK
+        # `build` has already assembled it. Release is unsigned here -- the
+        # signing material comes from environment variables that CI does not
+        # have -- so the debug build is the one that can actually be installed.
+        uses: actions/upload-artifact@v4
+        with:
+          name: parallax-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: reports
+          path: |
+            **/build/reports/**
+            **/build/outputs/lint-results-*.html
+          if-no-files-found: ignore
+
+  screenshots:
+    name: Screenshot tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: Compare against the recorded screenshots
+        run: ./gradlew verifyRoborazziDebug --no-daemon
+
+      - name: Upload the differences
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: screenshot-differences
+          path: |
+            **/build/outputs/roborazzi/**
+          if-no-files-found: ignore

@@ -4,6 +4,11 @@ plugins {
     id("parallax.android.application")
     id("parallax.android.compose")
     id("parallax.android.hilt")
+    // The navigation routes are type-safe, which means Navigation looks up a generated
+    // serialiser for every destination class. Without the compiler plugin those serialisers
+    // do not exist: the module compiles, and the first composition throws
+    // SerializationException before a single frame is drawn.
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -11,16 +16,19 @@ android {
         buildConfig = true
     }
 
-    signingConfigs {
-        create("release") {
-            // Release signing is supplied entirely through the environment so
-            // that no keystore, alias or password is ever committed. When the
-            // variables are absent (local debug builds, forks, CI pull-request
-            // runs) the config stays unpopulated and `assembleRelease` produces
-            // an unsigned APK rather than failing the configuration phase.
-            val storePath = System.getenv("PARALLAX_KEYSTORE")
-            if (!storePath.isNullOrBlank() && file(storePath).exists()) {
-                storeFile = file(storePath)
+    // Release signing is supplied entirely through the environment so that no
+    // keystore, alias or password is ever committed. When the variables are
+    // absent -- local builds, forks, CI pull-request runs -- no signing config
+    // is created at all and `assembleRelease` produces an unsigned APK.
+    // Creating an empty config and assigning it would instead fail the build in
+    // `validateSigningRelease`, which is a confusing way to say "no keystore".
+    val keystorePath: String? = System.getenv("PARALLAX_KEYSTORE")
+    val keystore = keystorePath?.takeIf { it.isNotBlank() }?.let(::file)?.takeIf { it.exists() }
+
+    if (keystore != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = keystore
                 storePassword = System.getenv("PARALLAX_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("PARALLAX_KEY_ALIAS")
                 keyPassword = System.getenv("PARALLAX_KEY_PASSWORD")
@@ -30,7 +38,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 }
@@ -53,6 +61,8 @@ dependencies {
     implementation(projects.engine.native)
     implementation(projects.engine.ml)
 
+    implementation(libs.arcore)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)
@@ -60,6 +70,11 @@ dependencies {
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
+
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
 
     androidTestImplementation(projects.core.testing)
     androidTestImplementation(libs.androidx.test.runner)

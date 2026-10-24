@@ -1,15 +1,124 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Parallax makes no network requests: scanning, reconstruction, storage and
+      export all happen on the device. There is deliberately no INTERNET
+      permission, which makes that guarantee enforceable by the platform rather
+      than a claim in the README.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Foreground service for reconstruction, which outlives the UI. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Reading photos and video for Import mode. The pre-Tiramisu permission is
+         capped so it is not requested where the media permissions exist. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="true" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <!--
+      ARCore is optional, and the app must install on devices without it:
+      Import mode runs full structure-from-motion and needs no AR at all. The
+      `required="false"` is what keeps Parallax installable on those devices,
+      and the UI explains the reduced mode rather than hiding features.
+    -->
+    <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
+    <uses-feature android:name="android.hardware.vulkan.compute" android:required="false" />
+    <uses-feature android:name="android.hardware.vulkan.level" android:required="false" />
+
     <application
         android:name=".ParallaxApplication"
-        android:label="Parallax">
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Parallax"
+        tools:targetApi="34">
+
+        <!-- "optional" rather than "required": ARCore is downloaded on demand
+             for devices that support it, and never for those that do not. -->
+        <meta-data android:name="com.google.ar.core" android:value="optional" />
+
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Parallax.Splash"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Opening a .parallax bundle from a file manager or an email. The
+                 extension is matched on the path because the MIME type a
+                 provider reports for an unknown extension is not reliable. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:mimeType="*/*" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.parallax" />
+            </intent-filter>
         </activity>
+
+        <!--
+          The crash screen runs in its own process. A crash while the application's own graph
+          is being built leaves the main process unable to start, so a screen hosted there
+          would never appear, and that is the crash a user is least able to report any other
+          way. The platform theme for the same reason: it must not depend on app resources.
+        -->
+        <activity
+            android:name=".diagnostics.CrashActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:process=":crash"
+            android:taskAffinity=".crash"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <!--
+          WorkManager is initialised on demand, because the application class
+          supplies Hilt's worker factory through Configuration.Provider. Leaving
+          the default initializer in place would construct the reconstruction
+          worker reflectively and fail at runtime with no injected dependencies.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

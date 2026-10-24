@@ -54,6 +54,7 @@ turbine = "1.2.1"
 mockk = "1.14.11"
 robolectric = "4.17"
 roborazzi = "1.77.0"
+uiautomator = "2.4.0"
 benchmark = "1.5.0"
 detekt = "1.23.8"
 
@@ -133,6 +134,7 @@ litert-support = { group = "com.google.ai.edge.litert", name = "litert-support",
 
 # ---- testing ---------------------------------------------------------------
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "testRunner" }
 androidx-test-rules = { group = "androidx.test", name = "rules", version.ref = "testRunner" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "testExtJunit" }

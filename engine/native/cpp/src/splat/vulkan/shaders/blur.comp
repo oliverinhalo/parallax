@@ -1,0 +1,46 @@
+#version 450
+
+// Separable Gaussian blur over a stack of single-channel planes.
+//
+// Zero padding, not edge clamping: the SSIM gradient applies this same blur as
+// its own adjoint, and that identity only holds for a symmetric kernel over a
+// zero-padded domain.
+
+layout(local_size_x = 64, local_size_y = 4) in;
+
+#define SSIM_RADIUS 5
+
+layout(set = 0, binding = 0, std430) readonly buffer Source { float source[]; };
+layout(set = 0, binding = 1, std430) writeonly buffer Destination { float destination[]; };
+
+layout(push_constant) uniform Push {
+  uint width;
+  uint height;
+  uint plane_count;
+  uint vertical;   ///< 0 for the horizontal pass, 1 for the vertical one
+} push;
+
+// exp(-i^2 / (2 * 1.5^2)), normalised. Written out rather than computed so the
+// host and the shader cannot drift apart by a rounding mode.
+const float kKernel[11] = float[11](0.00102838, 0.00759876, 0.03600077, 0.10936069, 0.21300554,
+                                    0.26601172, 0.21300554, 0.10936069, 0.03600077, 0.00759876,
+                                    0.00102838);
+
+void main() {
+  uint x = gl_GlobalInvocationID.x;
+  uint y = gl_GlobalInvocationID.y;
+  if (x >= push.width || y >= push.height) return;
+  uint pixels = push.width * push.height;
+
+  for (uint p = 0u; p < push.plane_count; ++p) {
+    uint base = p * pixels;
+    float sum = 0.0;
+    for (int i = -SSIM_RADIUS; i <= SSIM_RADIUS; ++i) {
+      int sx = int(x) + (push.vertical == 0u ? i : 0);
+      int sy = int(y) + (push.vertical == 0u ? 0 : i);
+      if (sx < 0 || sx >= int(push.width) || sy < 0 || sy >= int(push.height)) continue;
+      sum += kKernel[i + SSIM_RADIUS] * source[base + uint(sy) * push.width + uint(sx)];
+    }
+    destination[base + y * push.width + x] = sum;
+  }
+}

@@ -1,0 +1,36 @@
+#version 450
+
+// Third stage of SSIM: fold the blurred partials back into the image-space
+// gradient for one channel. Each statistic is itself a blur of the image, so
+// the chain rule is another blur of the per-window partials -- which is what
+// `blurred_terms` already holds.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Planes { float plane[]; };
+layout(set = 0, binding = 1, std430) readonly buffer BlurredTerms { float blurred_term[]; };
+layout(set = 0, binding = 2, std430) buffer Gradient { float dL_drgb[]; };
+
+layout(push_constant) uniform Push {
+  uint pixel_count;
+  uint channel;
+  float ssim_weight;
+} push;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= push.pixel_count) return;
+  uint pixels = push.pixel_count;
+
+  float x = plane[0u * pixels + i];
+  float y = plane[1u * pixels + i];
+  float d_mu = blurred_term[0u * pixels + i];
+  float d_var = blurred_term[1u * pixels + i];
+  float d_cov = blurred_term[2u * pixels + i];
+  float d_var_mu = blurred_term[3u * pixels + i];
+  float d_cov_mu = blurred_term[4u * pixels + i];
+
+  float d_similarity = d_mu + 2.0 * x * d_var - 2.0 * d_var_mu + y * d_cov - d_cov_mu;
+  // The loss is 1 - SSIM, so a higher similarity is a lower loss.
+  dL_drgb[i * 3u + push.channel] -= push.ssim_weight * d_similarity;
+}

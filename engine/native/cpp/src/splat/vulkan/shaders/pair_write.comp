@@ -1,0 +1,44 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Expands each visible splat into one (tile, depth) key per tile it touches,
+// at the offset the prefix sum assigned it. One invocation per splat.
+
+#include "common.glsl"
+#include "params.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 1, std430) readonly buffer Projected { float proj[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Meta { uint meta[]; };
+layout(set = 0, binding = 3, std430) readonly buffer Offsets { uint pair_offset[]; };
+layout(set = 0, binding = 6, std430) readonly buffer TileCounts { uint tile_count[]; };
+layout(set = 0, binding = 4, std430) writeonly buffer Keys { uint pair_key[]; };
+layout(set = 0, binding = 5, std430) writeonly buffer Values { uint pair_value[]; };
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= uint(GAUSSIAN_COUNT)) return;
+  if ((meta[i * META_STRIDE + META_FLAGS] & FLAG_VISIBLE) == 0u) return;
+  if (tile_count[i] == 0u) return;
+
+  uint base = i * PROJ_STRIDE;
+  vec2 mean = vec2(proj[base + PROJ_MEAN_X], proj[base + PROJ_MEAN_Y]);
+  float radius = proj[base + PROJ_RADIUS];
+  float depth = proj[base + PROJ_DEPTH];
+
+  int x0 = max(0, int(floor((mean.x - radius) / float(TILE_SIZE))));
+  int x1 = min(TILE_COLS - 1, int(floor((mean.x + radius) / float(TILE_SIZE))));
+  int y0 = max(0, int(floor((mean.y - radius) / float(TILE_SIZE))));
+  int y1 = min(TILE_ROWS - 1, int(floor((mean.y + radius) / float(TILE_SIZE))));
+
+  uint cursor = pair_offset[i];
+  for (int ty = y0; ty <= y1; ++ty) {
+    for (int tx = x0; tx <= x1; ++tx) {
+      uint tile = uint(ty * TILE_COLS + tx);
+      pair_key[cursor] = packSortKey(tile, depth);
+      pair_value[cursor] = i;
+      ++cursor;
+    }
+  }
+}

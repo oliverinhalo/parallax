@@ -1,0 +1,170 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Second half of the backward pass: screen space back to each gaussian's own
+// parameters. One invocation per gaussian, no atomics needed -- every splat
+// owns its own output slots. Mirrors the second loop of
+// rasterizeSplatsBackward() in src/splat/SplatRaster.cpp.
+
+#include "common.glsl"
+#include "params.glsl"
+#include "sh.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 1, std430) readonly buffer Positions { float position[]; };
+layout(set = 0, binding = 2, std430) readonly buffer LogScales { float log_scale[]; };
+layout(set = 0, binding = 3, std430) readonly buffer Rotations { float rotation[]; };
+layout(set = 0, binding = 4, std430) readonly buffer ShRest { float sh_rest[]; };
+layout(set = 0, binding = 5, std430) readonly buffer Projected { float proj[]; };
+layout(set = 0, binding = 6, std430) readonly buffer Meta { uint meta[]; };
+layout(set = 0, binding = 7, std430) readonly buffer ScreenGradient { uint screen_gradient[]; };
+layout(set = 0, binding = 8, std430) buffer GradPosition { float grad_position[]; };
+layout(set = 0, binding = 9, std430) buffer GradLogScale { float grad_log_scale[]; };
+layout(set = 0, binding = 10, std430) buffer GradRotation { float grad_rotation[]; };
+layout(set = 0, binding = 11, std430) buffer GradOpacity { float grad_opacity[]; };
+layout(set = 0, binding = 12, std430) buffer GradDc { float grad_dc[]; };
+layout(set = 0, binding = 13, std430) buffer GradShRest { float grad_sh_rest[]; };
+layout(set = 0, binding = 14, std430) buffer Statistics { float statistic[]; };
+layout(set = 0, binding = 15, std430) buffer VisibleCounts { uint visible_count[]; };
+
+float screenValue(uint base, int slot) {
+  return uintBitsToFloat(screen_gradient[base + uint(slot)]);
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= uint(GAUSSIAN_COUNT)) return;
+
+  uint flags = meta[i * META_STRIDE + META_FLAGS];
+  if ((flags & FLAG_VISIBLE) == 0u) return;
+
+  uint screen = i * SCREEN_STRIDE;
+  visible_count[i] += 1u;
+  statistic[i] += screenValue(screen, SCREEN_DMEAN_ABS);
+
+  uint base = i * PROJ_STRIDE;
+  vec3 conic = vec3(proj[base + PROJ_CONIC_X], proj[base + PROJ_CONIC_Y], proj[base + PROJ_CONIC_Z]);
+  float opacity = proj[base + PROJ_OPACITY];
+  vec2 dL_dmean = vec2(screenValue(screen, SCREEN_DMEAN_X), screenValue(screen, SCREEN_DMEAN_Y));
+  vec3 dL_dconic = vec3(screenValue(screen, SCREEN_DCONIC_X), screenValue(screen, SCREEN_DCONIC_Y),
+                        screenValue(screen, SCREEN_DCONIC_Z));
+
+  grad_opacity[i] += screenValue(screen, SCREEN_DOPACITY) * opacity * (1.0 - opacity);
+
+  // Colour, through the clamp that the spherical-harmonic sum may have hit.
+  vec3 dL_dcolor = vec3(screenValue(screen, SCREEN_DCOLOR_R), screenValue(screen, SCREEN_DCOLOR_G),
+                        screenValue(screen, SCREEN_DCOLOR_B));
+  for (int c = 0; c < 3; ++c) {
+    if ((flags & (2u << uint(c))) != 0u) dL_dcolor[c] = 0.0;
+    grad_dc[i * 3u + uint(c)] += float(SH_C0) * dL_dcolor[c];
+  }
+
+  vec3 world = vec3(position[i * 3u], position[i * 3u + 1u], position[i * 3u + 2u]);
+  vec3 offset = world - params.camera_center.xyz;
+  float distance = length(offset);
+  int per_channel = SH_REST_STRIDE / 3;
+
+  vec3 dL_ddirection = vec3(0.0);
+  if (SH_DEGREE >= 1 && distance > 1e-9 && per_channel > 0) {
+    vec3 direction = offset / distance;
+    float basis[15];
+    int basis_count = shBasis(SH_DEGREE, direction, basis);
+    vec3 jacobian[15];
+    shBasisJacobian(basis_count, direction, jacobian);
+    int usable = min(basis_count, per_channel);
+    for (int c = 0; c < 3; ++c) {
+      if (dL_dcolor[c] == 0.0) continue;
+      uint channel_base = i * uint(SH_REST_STRIDE) + uint(c * per_channel);
+      for (int b = 0; b < usable; ++b) {
+        grad_sh_rest[channel_base + uint(b)] += basis[b] * dL_dcolor[c];
+        dL_ddirection += jacobian[b] * (sh_rest[channel_base + uint(b)] * dL_dcolor[c]);
+      }
+    }
+  }
+
+  mat3 W = viewRotation();
+  vec3 p_cam = W * world + viewTranslation();
+  float z = p_cam.z;
+  vec3 dL_dp_cam = vec3(VIEW_FX / z * dL_dmean.x, VIEW_FY / z * dL_dmean.y,
+                        -(VIEW_FX * p_cam.x * dL_dmean.x + VIEW_FY * p_cam.y * dL_dmean.y) /
+                            (z * z));
+
+  // conic back to the 2D covariance: d(A^-1) = -A^-1 dA A^-1
+  mat2 conic_matrix = mat2(conic.x, conic.y, conic.y, conic.z);
+  mat2 dL_dconic_matrix = mat2(dL_dconic.x, 0.5 * dL_dconic.y, 0.5 * dL_dconic.y, dL_dconic.z);
+  mat2 dL_dcov2d = -(conic_matrix * dL_dconic_matrix * conic_matrix);
+
+  float tan_half_x = 0.5 * float(VIEW_WIDTH) / VIEW_FX;
+  float tan_half_y = 0.5 * float(VIEW_HEIGHT) / VIEW_FY;
+  float limit_x = tan_half_x * FRUSTUM_SLACK;
+  float limit_y = tan_half_y * FRUSTUM_SLACK;
+  bool clamped_x = abs(p_cam.x / z) > limit_x;
+  bool clamped_y = abs(p_cam.y / z) > limit_y;
+  float jx = clamp(p_cam.x / z, -limit_x, limit_x) * z;
+  float jy = clamp(p_cam.y / z, -limit_y, limit_y) * z;
+
+  mat3x2 J = mat3x2(vec2(VIEW_FX / z, 0.0), vec2(0.0, VIEW_FY / z),
+                    vec2(-VIEW_FX * jx / (z * z), -VIEW_FY * jy / (z * z)));
+  mat3x2 T = J * W;
+
+  vec3 scale = exp(vec3(log_scale[i * 3u], log_scale[i * 3u + 1u], log_scale[i * 3u + 2u]));
+  vec4 q = normalize(vec4(rotation[i * 4u], rotation[i * 4u + 1u], rotation[i * 4u + 2u],
+                          rotation[i * 4u + 3u]));
+  mat3 R = quaternionToMatrix(q);
+  mat3 M = R * mat3(scale.x, 0.0, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, scale.z);
+  mat3 sigma = M * transpose(M);
+
+  mat3 dL_dcov3d = transpose(T) * dL_dcov2d * T;
+  mat3x2 dL_dT = 2.0 * dL_dcov2d * T * sigma;
+  mat3x2 dL_dJ = dL_dT * transpose(W);
+
+  if (!clamped_x) dL_dp_cam.x += dL_dJ[2][0] * (-VIEW_FX / (z * z));
+  if (!clamped_y) dL_dp_cam.y += dL_dJ[2][1] * (-VIEW_FY / (z * z));
+  // Once a coordinate is clamped the entry is -f * limit / z, whose
+  // z-derivative is half what the unclamped -f * x / z^2 gives.
+  float dz_x = (clamped_x ? 1.0 : 2.0) * VIEW_FX * jx / (z * z * z);
+  float dz_y = (clamped_y ? 1.0 : 2.0) * VIEW_FY * jy / (z * z * z);
+  dL_dp_cam.z += dL_dJ[0][0] * (-VIEW_FX / (z * z)) + dL_dJ[1][1] * (-VIEW_FY / (z * z)) +
+                 dL_dJ[2][0] * dz_x + dL_dJ[2][1] * dz_y;
+
+  vec3 dL_dposition = transpose(W) * dL_dp_cam;
+  if (distance > 1e-9 && dot(dL_ddirection, dL_ddirection) > 0.0) {
+    vec3 direction = offset / distance;
+    dL_dposition += (dL_ddirection - direction * dot(direction, dL_ddirection)) / distance;
+  }
+  for (int a = 0; a < 3; ++a) grad_position[i * 3u + uint(a)] += dL_dposition[a];
+
+  mat3 symmetric = 0.5 * (dL_dcov3d + transpose(dL_dcov3d));
+  mat3 dL_dM = 2.0 * symmetric * M;
+  mat3 dL_dS = transpose(R) * dL_dM;
+  for (int a = 0; a < 3; ++a) {
+    grad_log_scale[i * 3u + uint(a)] += dL_dS[a][a] * scale[a];
+  }
+
+  // dL_dR[row][col] in mathematical indexing; GLSL's mat3 is column-major, so
+  // element (row, col) is written m[col][row].
+  float dR[3][3];
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) dR[row][col] = dL_dM[col][row] * scale[col];
+  }
+
+  float qw = q.x, qx = q.y, qy = q.z, qz = q.w;
+  vec4 dL_dq;
+  dL_dq[0] = 2.0 * (-qz * dR[0][1] + qy * dR[0][2] + qz * dR[1][0] - qx * dR[1][2] -
+                    qy * dR[2][0] + qx * dR[2][1]);
+  dL_dq[1] = 2.0 * (qy * dR[0][1] + qz * dR[0][2] + qy * dR[1][0] - 2.0 * qx * dR[1][1] -
+                    qw * dR[1][2] + qz * dR[2][0] + qw * dR[2][1] - 2.0 * qx * dR[2][2]);
+  dL_dq[2] = 2.0 * (-2.0 * qy * dR[0][0] + qx * dR[0][1] + qw * dR[0][2] + qx * dR[1][0] +
+                    qz * dR[1][2] - qw * dR[2][0] + qz * dR[2][1] - 2.0 * qy * dR[2][2]);
+  dL_dq[3] = 2.0 * (-2.0 * qz * dR[0][0] - qw * dR[0][1] + qx * dR[0][2] + qw * dR[1][0] -
+                    2.0 * qz * dR[1][1] + qy * dR[1][2] + qx * dR[2][0] + qy * dR[2][1]);
+
+  // The forward pass normalises the quaternion, so the component along the
+  // quaternion itself carries no gradient.
+  float raw_norm = max(length(vec4(rotation[i * 4u], rotation[i * 4u + 1u],
+                                   rotation[i * 4u + 2u], rotation[i * 4u + 3u])),
+                       1e-12);
+  vec4 projected_gradient = (dL_dq - q * dot(q, dL_dq)) / raw_norm;
+  for (int a = 0; a < 4; ++a) grad_rotation[i * 4u + uint(a)] += projected_gradient[a];
+}

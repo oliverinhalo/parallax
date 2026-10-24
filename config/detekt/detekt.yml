@@ -11,9 +11,18 @@ complexity:
   LongParameterList:
     functionThreshold: 9
     constructorThreshold: 12
+    # Compose's convention is explicit parameters with defaults. Bundling a
+    # component's callbacks into a holder object hurts previews and recomposition
+    # skipping without making the call site any clearer.
+    ignoreAnnotated: ['Composable']
   TooManyFunctions:
-    thresholdInFiles: 40
-    thresholdInClasses: 30
+    thresholdInFiles: 60
+    thresholdInClasses: 40
+    # A Room DAO is a list of queries and a JNI object is a list of native
+    # symbols; both are flat surfaces where splitting by count would just make
+    # the call sites harder to follow.
+    thresholdInInterfaces: 30
+    thresholdInObjects: 60
     ignoreAnnotatedFunctions: ['Composable']
   CyclomaticComplexMethod:
     threshold: 20
@@ -26,7 +35,22 @@ style:
     # meaningful constants; naming every one of them adds noise.
     ignorePropertyDeclaration: true
     ignoreCompanionObjectPropertyDeclaration: true
+    ignoreConstantDeclaration: true
+    ignoreNamedArgument: true
+    ignoreEnums: true
     ignoreAnnotated: ['Composable', 'Preview']
+    # The viewer's geometry: vector component indices and the small factors of
+    # linear algebra. `positions[index * 3 + 2]` says what it means; the same
+    # line written with Z_COMPONENT and FLOATS_PER_VERTEX says it less well.
+    # Listing `excludes` replaces detekt's default, which exempts test
+    # sources, so those globs have to be repeated here rather than inherited.
+    excludes:
+      - '**/test/**'
+      - '**/androidTest/**'
+      - '**/feature/viewer/camera/**'
+      - '**/feature/viewer/edit/**'
+      - '**/feature/viewer/pick/**'
+      - '**/feature/viewer/measure/**'
   MaxLineLength:
     maxLineLength: 120
   ReturnCount:

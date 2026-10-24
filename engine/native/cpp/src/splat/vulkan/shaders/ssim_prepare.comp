@@ -1,0 +1,28 @@
+#version 450
+
+// First stage of SSIM: lay out the five per-pixel quantities whose local means
+// the metric is built from. One channel at a time, so the intermediate buffers
+// stay a third of the size they would otherwise be.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Rendered { float rendered[]; };
+layout(set = 0, binding = 1, std430) readonly buffer Target { float target[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer Planes { float plane[]; };
+
+layout(push_constant) uniform Push {
+  uint pixel_count;
+  uint channel;
+} push;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= push.pixel_count) return;
+  float x = rendered[i * 3u + push.channel];
+  float y = target[i * 3u + push.channel];
+  plane[0u * push.pixel_count + i] = x;
+  plane[1u * push.pixel_count + i] = y;
+  plane[2u * push.pixel_count + i] = x * x;
+  plane[3u * push.pixel_count + i] = y * y;
+  plane[4u * push.pixel_count + i] = x * y;
+}

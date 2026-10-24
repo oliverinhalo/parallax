@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The themed-icon layer (Android 13+). A single flat colour is tinted by the
+  system, so the ghosted copy is drawn with a thinner stroke rather than a lower
+  alpha: alpha is preserved by the tint and would make the far cube look like a
+  rendering error at small sizes.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+    android:tint="#FFFFFF">
+
+    <group android:translateX="-5.5" android:translateY="3">
+        <path
+            android:pathData="M54,30 L72,40 L72,62 L54,72 L36,62 L36,40 Z"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="1.8"
+            android:strokeLineJoin="round"
+            android:strokeLineCap="round" />
+    </group>
+
+    <group android:translateX="5.5" android:translateY="-3">
+        <path
+            android:pathData="M54,30 L72,40 L72,62 L54,72 L36,62 L36,40 Z"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="4"
+            android:strokeLineJoin="round"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M36,40 L54,50 L72,40 M54,50 L54,72"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="4"
+            android:strokeLineJoin="round"
+            android:strokeLineCap="round" />
+    </group>
+</vector>

@@ -1,0 +1,17 @@
+#version 450
+
+// Adds each block's scanned offset back onto its elements, completing the
+// two-level exclusive scan started by scan_block.comp.
+
+layout(local_size_x = 256) in;
+#define SCAN_BLOCK 512
+
+layout(set = 0, binding = 0, std430) buffer Scanned { uint scanned[]; };
+layout(set = 0, binding = 1, std430) readonly buffer Offsets { uint block_offset[]; };
+layout(push_constant) uniform Push { uint count; } push;
+
+void main() {
+  uint index = gl_GlobalInvocationID.x;
+  if (index >= push.count) return;
+  scanned[index] += block_offset[index / uint(SCAN_BLOCK)];
+}

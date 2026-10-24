@@ -1,0 +1,42 @@
+#version 450
+
+// One 4-bit digit pass of an LSD radix sort: count how many elements in each
+// block fall into each of the sixteen buckets. The counts are written
+// digit-major so that an exclusive scan over the whole array gives, for each
+// (digit, block), the position its elements start at in the output.
+//
+// Four bits rather than eight: it doubles the number of passes but divides
+// the histogram by sixteen, which keeps its prefix sum down to two levels and
+// the whole sort to one buffer size that never needs a third.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Keys { uint key[]; };
+layout(set = 0, binding = 1, std430) writeonly buffer Histogram { uint histogram[]; };
+layout(push_constant) uniform Push {
+  uint count;        ///< padded element count, a multiple of 256
+  uint shift;        ///< bit position of this pass's digit
+  uint block_count;
+} push;
+
+#define RADIX_DIGITS 16
+
+shared uint local_histogram[RADIX_DIGITS];
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint block = gl_WorkGroupID.x;
+
+  if (thread < uint(RADIX_DIGITS)) local_histogram[thread] = 0u;
+  barrier();
+
+  uint index = block * 256u + thread;
+  if (index < push.count) {
+    atomicAdd(local_histogram[(key[index] >> push.shift) & 0xFu], 1u);
+  }
+  barrier();
+
+  if (thread < uint(RADIX_DIGITS)) {
+    histogram[thread * push.block_count + block] = local_histogram[thread];
+  }
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Placing a scan in a room needs the camera, declared here so the module is
+  self-describing and Lint can see its ARCore calls are permitted.
+
+  ARCore is declared optional in :app, because a device without it still gets
+  photo import, processing, the viewer and every export; only this screen and
+  the AR capture modes are unavailable.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+</manifest>

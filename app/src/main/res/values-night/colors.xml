@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Parallax is dark-first, so the night value is the same graphite. The
+         resource is duplicated rather than removed so that a future light
+         default does not silently change the splash. -->
+    <color name="surface_sunken">#0E1013</color>
+</resources>

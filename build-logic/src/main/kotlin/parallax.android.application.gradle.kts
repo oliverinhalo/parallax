@@ -50,6 +50,18 @@ extensions.configure<ApplicationExtension> {
         unitTests {
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
+            all { test ->
+                // See parallax.android.library for why these are needed: Robolectric reaches
+                // into JDK internals, and Gradle 9 fails a test task that finds no tests even
+                // when the only test sources are AGP's generated ones.
+                test.failOnNoDiscoveredTests = false
+                test.jvmArgs(
+                    "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                )
+            }
         }
     }
 
@@ -72,7 +84,7 @@ extensions.configure<ApplicationExtension> {
 
 kotlin {
     compilerOptions {
-        freeCompilerArgs.addAll("-Xjvm-default=all")
+        freeCompilerArgs.addAll("-jvm-default=enable")
     }
 }
 

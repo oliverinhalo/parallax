@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors ParallaxPalette.Graphite0 in the design system. Only the window
+         background and the splash need a platform colour resource; everything
+         else comes from the Compose theme. -->
+    <color name="surface_sunken">#0E1013</color>
+</resources>
