@@ -425,10 +425,42 @@ The camera-background shader that capture and AR placement both need moved into
 
 ---
 
-## Remaining phases
+## Phase 12 — Polish, benchmarks and CI ✅
 
-- [ ] **Phase 12 — Polish & hardening**: accessibility pass, screenshot tests,
-      macrobenchmarks, CI, remaining docs
+**Three CI jobs.** The native engine built and tested on the host with its
+microbenchmarks recorded as an artifact; the Android build with unit tests,
+Lint, detekt and R8; and the screenshot comparison. The benchmark numbers are
+recorded rather than asserted on, because a shared runner is too noisy to fail
+a build over and the point is that a tenfold regression appears in the log of
+the run that caused it.
+
+**Benchmarks at both levels.** Macrobenchmarks for cold, warm and as-installed
+startup, and for frame timing while flinging the library. A native binary times
+the ten hot paths; on this machine multi-view stereo costs two orders of
+magnitude more per megapixel than anything else, which is what the quality
+presets are really trading away.
+
+**Screenshot tests, including at twice the font size.** One gallery of every
+component rather than one test per component: the thing worth catching is a
+change to a shared token, and a single image shows all of it at once. The
+large-font variant exists because that is the accessibility regression easiest
+to introduce and hardest to notice — and it immediately found two.
+
+**Accessibility.** Minimum touch targets of 48dp on every interactive
+component, content descriptions on every icon-only control and every slider,
+layouts that wrap rather than clip at large font scales, and a coverage ramp
+that varies lightness within one hue rather than running red to green — which
+is the obvious choice and unreadable to the eight percent of men with a
+red-green deficiency.
+
+### Bugs this phase's tests caught
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| The theme never painted its own background | Dark-on-light text on every screen without its own surface, for anyone running the app dark on a light system | The activity's `windowBackground` follows the *system* dark mode while the theme follows the user's setting. The two agree most of the time, which is why it would have shipped |
+| The export screen's unit chips could not all be reached | "Feet" was off the right edge at any font scale | Five chip labels in a plain `Row` on a 411dp phone |
+| The badge row ran off the screen at 2x font scale | "Success" invisible, "Danger" squeezed to one character wide | Same cause, only visible at a large font scale |
+| A dangling reference in the benchmark harness | Segfault partway through the run | A `[&]` lambda over a block-scoped C++ fixture, called after the block ended |
 
 ---
 
@@ -438,7 +470,8 @@ Stated plainly so nothing here is mistaken for more than it is.
 
 **Verified by tests that run in this repo:** 337 native gtest assertions and
 386 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
-release minification and APK packaging.
+release minification, APK packaging and screenshot comparison. All of it runs
+on every push through `.github/workflows/ci.yml`.
 
 The capture *logic* is covered — coverage accumulation, guidance priority and
 hysteresis, keyframe selection, rate limiting, thermal throttling, the summary

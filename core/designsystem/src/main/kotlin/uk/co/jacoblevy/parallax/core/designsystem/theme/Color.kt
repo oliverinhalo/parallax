@@ -139,6 +139,11 @@ internal val DarkParallaxColors = ParallaxColors(
     textDisabled = ParallaxPalette.InkDisabled,
     outline = ParallaxPalette.OutlineDark,
     outlineSubtle = ParallaxPalette.OutlineDarkSubtle,
+    // One hue, four lightnesses. A red-to-green coverage ramp is the obvious
+    // choice and the wrong one: it is unreadable to the eight percent of men
+    // with a red-green deficiency, and coverage is the single thing a user has
+    // to read correctly while scanning. Varying lightness within one hue
+    // survives every form of colour blindness and greyscale besides.
     coverageRamp = listOf(
         Color(0xFF2A2F34),
         ParallaxPalette.CyanDim,
