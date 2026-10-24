@@ -398,3 +398,33 @@ current measurement — and the design depends on it being the only saturated co
 field. A wallpaper-derived palette can produce a low-contrast accent against a mid-grey surface,
 which would make the capture overlay harder to read in exactly the conditions (bright sunlight,
 one-handed) where it matters most. Users who prefer system theming can still have it.
+
+---
+
+## ADR-015 — Releases are signed with repository secrets, and fall back to a throwaway key
+
+**Status:** accepted
+
+**Context.** The APK has to be installable from the GitHub Releases page. Android will not
+install an unsigned APK, and `app/build.gradle.kts` deliberately creates no signing config when
+the environment variables are absent, so `assembleRelease` on CI produces something nobody can
+use.
+
+**Decision.** A tag-triggered `release` workflow decodes a keystore from
+`PARALLAX_KEYSTORE_BASE64` and signs with it. When that secret is not set, it generates a 4096-bit
+RSA key in the runner's temporary directory, signs with that, and discards it — then says so in a
+workflow warning and in the release notes.
+
+**Why not fail instead.** A release job that refuses to produce anything until four secrets exist
+means the first release of a fresh clone is a configuration exercise. The fallback makes the
+common case — install it on a phone and try it — work immediately.
+
+**What it costs.** An APK signed with a throwaway key cannot be upgraded in place: the next
+release has a different signature, so Android rejects the update and the user has to uninstall
+first, losing their scans. That is a genuinely bad outcome, which is why the fallback is loud in
+two places rather than silent. It is a stopgap for trying the app, not a way to ship it; anything
+beyond that needs the secrets set, and the keystore kept somewhere it cannot be lost, because
+losing it has the same consequence permanently.
+
+**Why not commit an encrypted keystore.** The passphrase would have to live somewhere too, and a
+repository that contains both is a repository that contains the key.

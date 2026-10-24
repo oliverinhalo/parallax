@@ -47,6 +47,17 @@ standing in, at life size or as a tabletop model.
 
 ---
 
+## Installing it
+
+The [Releases page](../../releases) carries an APK per tag. Download it on the
+phone and open it; Android asks once for permission to install from that source.
+
+It is signed with the key held in the repository's secrets. If those are not
+set the workflow signs with a key it generates and discards, which installs
+fine but cannot be upgraded in place — see ADR-015.
+
+---
+
 ## Building it
 
 You need JDK 17, the Android SDK with NDK 28.2.13676358 and CMake 3.22.1, and a
