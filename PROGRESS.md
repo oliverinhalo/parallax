@@ -385,9 +385,48 @@ ADR-013, and it is what let the hardest part of the rendering be unit-tested.
 
 ---
 
+## Phase 11 — Export, AR placement and the offline viewer ✅
+
+**Thirteen export formats, one screen.** Every writer is in the native engine,
+so the Kotlin side is a translator: it picks the file name, chooses the right
+engine call, and turns the engine's answer into a file or a message someone can
+act on. Formats a scan cannot produce are listed separately rather than hidden,
+because a user hunting for USDZ on a point-cloud-only scan needs to know there
+is no mesh, not be left wondering whether the app has it.
+
+Exports are written into the project first and copied out afterwards. A share
+sheet needs a file that outlives the call, a save dialog needs a source to copy
+from, and neither should be able to leave a truncated file in someone's
+Downloads. Sharing stages a copy in the one directory the FileProvider exposes,
+so a share grant cannot reach the frames or the checkpoints.
+
+**The offline HTML viewer is self-contained, and tested for it.** Geometry goes
+in as base64 typed arrays, the texture as an embedded PNG, and the renderer is
+a few hundred lines of WebGL 1 inlined beside them -- no CDN, no second file, no
+`fetch`. A test asserts the absence of `http`, `script src`, `<link>`, `fetch`
+and `XMLHttpRequest`, because "self-contained" is the whole feature and it would
+be easy to regress by one convenient import.
+
+**AR placement** is the placement arithmetic as pure state -- where the model
+sits, how big, which way round -- with ARCore and GLES behind it. A room scan
+placed life size will not fit in the room it is being shown in, so anything
+over head height goes down as a tabletop model instead.
+
+The camera-background shader that capture and AR placement both need moved into
+`:core:ar`, which exists for exactly that one file.
+
+### Bugs this phase's tests caught
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| The scan's name went into the HTML unescaped | A scan called `<script>…` would have run that script in the browser of whoever it was sent to | Exported HTML is a file other people open, and the title comes straight from user input. Title and facts are now escaped, and a test asserts it |
+| A texture was embedded for a mesh with no UVs | Hundreds of kilobytes of base64 atlas that nothing could sample | The texture was embedded whenever one was offered, rather than only when the geometry could use it |
+| An unnamed scan produced a file called `.glb` | A file with no name, which some file managers hide | The name sanitiser could reduce a name to nothing, with no fallback |
+
+---
+
 ## Remaining phases
 
-- [ ] **Phase 11 — Export UI, AR placement, offline HTML viewer**
 - [ ] **Phase 12 — Polish & hardening**: accessibility pass, screenshot tests,
       macrobenchmarks, CI, remaining docs
 
@@ -397,8 +436,8 @@ ADR-013, and it is what let the hardest part of the rendering be unit-tested.
 
 Stated plainly so nothing here is mistaken for more than it is.
 
-**Verified by tests that run in this repo:** 325 native gtest assertions and
-358 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
+**Verified by tests that run in this repo:** 337 native gtest assertions and
+386 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
 release minification and APK packaging.
 
 The capture *logic* is covered — coverage accumulation, guidance priority and

@@ -21,6 +21,7 @@
 #include "parallax/io/Json.h"
 #include "parallax/io/MeshReader.h"
 #include "parallax/pipeline/Pipeline.h"
+#include "parallax/exporters/HtmlViewer.h"
 #include "parallax/splat/SplatPreview.h"
 #include "parallax/splat/GaussianCloud.h"
 
@@ -218,6 +219,32 @@ ExportOptions parseExportOptions(const std::string& json_text) {
   options.include_normals = json.get("includeNormals").asBool(true);
   options.include_uvs = json.get("includeUvs").asBool(true);
   if (json.has("name")) options.name = json.get("name").asString();
+  options.unlit = json.get("unlit").asBool(false);
+  options.blend = json.get("blend").asBool(false);
+  return options;
+}
+
+/// The extra settings the HTML viewer and the floor plans take.
+struct PresentationOptions {
+  std::string title = "Parallax scan";
+  std::vector<std::pair<std::string, std::string>> facts;
+  bool dark = true;
+  bool imperial = false;
+};
+
+PresentationOptions parsePresentationOptions(const std::string& json_text) {
+  PresentationOptions options;
+  Json json;
+  if (!Json::parse(json_text, &json) || !json.isObject()) return options;
+  if (json.has("title")) options.title = json.get("title").asString();
+  options.dark = json.get("dark").asBool(true);
+  options.imperial = json.get("imperial").asBool(false);
+  if (json.has("facts")) {
+    const Json& facts = json.get("facts");
+    for (size_t i = 0; i + 1 < facts.size(); i += 2) {
+      options.facts.emplace_back(facts.at(i).asString(), facts.at(i + 1).asString());
+    }
+  }
   return options;
 }
 
@@ -392,6 +419,8 @@ Java_uk_co_jacoblevy_parallax_engine_nativebridge_ParallaxEngine_nativeExport(
   bool success = false;
   std::string message;
 
+  const PresentationOptions presentation = parsePresentationOptions(toStdString(env, options_json));
+
   if (kind == "ply_points") {
     std::vector<Vec3f> points, normals;
     std::vector<std::array<uint8_t, 3>> colors;
@@ -400,6 +429,21 @@ Java_uk_co_jacoblevy_parallax_engine_nativebridge_ParallaxEngine_nativeExport(
     }
     success = writePointCloudPly(path, points, normals, colors, options);
     message = success ? std::to_string(points.size()) + " points" : "write failed";
+  } else if (kind == "floorplan_svg" || kind == "floorplan_png" || kind == "floorplan_pdf") {
+    const FloorPlan plan = pipeline->loadFloorPlan();
+    if (!plan.valid()) return fail("this project has no floor plan");
+    FloorPlanStyle style;
+    style.dark = presentation.dark;
+    style.unit = presentation.imperial ? LengthUnit::Feet : LengthUnit::Metres;
+    style.title = presentation.title;
+    if (kind == "floorplan_svg") {
+      success = writeFileText(path, renderFloorPlanSvg(plan, style));
+    } else if (kind == "floorplan_png") {
+      success = writePngFile(path, renderFloorPlanRaster(plan, style));
+    } else {
+      success = writeFileBytes(path, renderFloorPlanPdf(plan, style));
+    }
+    message = success ? "floor plan written" : "write failed";
   } else {
     Mesh mesh = pipeline->loadMesh();
     if (mesh.empty()) return fail("this project has no mesh");
@@ -416,6 +460,15 @@ Java_uk_co_jacoblevy_parallax_engine_nativebridge_ParallaxEngine_nativeExport(
       success = writeUsdz(path, mesh, atlas, options);
     } else if (kind == "ply") {
       success = writePly(path, mesh, options);
+    } else if (kind == "html") {
+      HtmlViewerOptions html;
+      html.title = presentation.title;
+      html.facts = presentation.facts;
+      html.dark = presentation.dark;
+      if (options.target_triangles > 0) html.target_triangles = options.target_triangles;
+      if (options.max_texture_size > 0) html.max_texture_size = options.max_texture_size;
+      success = writeHtmlViewer(path, mesh, atlas, html);
+      message = success ? "self-contained viewer written" : "write failed";
     } else if (kind == "stl") {
       // STL must be watertight to print, so prefer the sealed variant when one exists.
       Mesh watertight = mesh;

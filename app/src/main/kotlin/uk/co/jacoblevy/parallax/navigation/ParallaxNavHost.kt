@@ -19,6 +19,8 @@ import uk.co.jacoblevy.parallax.feature.processing.ProcessingRoute
 import uk.co.jacoblevy.parallax.feature.onboarding.OnboardingRoute
 import uk.co.jacoblevy.parallax.feature.settings.LicencesRoute
 import uk.co.jacoblevy.parallax.feature.settings.SettingsRoute
+import uk.co.jacoblevy.parallax.feature.ar.ui.ArPlacementRoute
+import uk.co.jacoblevy.parallax.feature.export.ExportRoute
 import uk.co.jacoblevy.parallax.feature.viewer.ui.ViewerRoute
 
 /**
@@ -114,6 +116,14 @@ fun ParallaxNavHost(
                 onExport = { navController.navigate(ParallaxRoute.Export(it)) },
                 onPlaceInRoom = { navController.navigate(ParallaxRoute.ArPlacement(it)) },
             )
+        }
+
+        composable<ParallaxRoute.Export> {
+            ExportRoute(onBack = navController::popBackStack)
+        }
+
+        composable<ParallaxRoute.ArPlacement> {
+            ArPlacementRoute(onBack = navController::popBackStack)
         }
 
         composable<ParallaxRoute.Settings> {

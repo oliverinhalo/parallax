@@ -56,6 +56,21 @@ class ProjectTransfer @Inject constructor(
     @VisibleForTesting
     fun stagingFile(fileName: String): File = storage.sharedFile(fileName)
 
+    /**
+     * Copy a finished export into a document the user picked.
+     *
+     * Exports are written into the project first and copied out afterwards, so
+     * that a failure part-way through leaves nothing half-written where the
+     * user can see it, and a cancelled save dialog leaves nothing at all.
+     */
+    suspend fun copyToUri(source: File, uri: Uri) = withContext(io) {
+        val stream = context.contentResolver.openOutputStream(uri)
+            ?: throw ParallaxException(
+                ParallaxError.StorageFailure(uri.toString(), "could not open the destination"),
+            )
+        stream.use { out -> source.inputStream().use { it.copyTo(out) } }
+    }
+
     /** A suggested file name for a project's bundle, safe for any filesystem. */
     fun suggestedBundleName(project: Project): String {
         val base = project.name.map { if (it.isLetterOrDigit() || it == ' ') it else '-' }

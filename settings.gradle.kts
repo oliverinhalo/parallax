@@ -47,6 +47,7 @@ include(":core:model")
 include(":core:designsystem")
 include(":core:data")
 include(":core:testing")
+include(":core:ar")
 
 // User-facing features. Each owns its navigation graph and ViewModels.
 include(":feature:onboarding")

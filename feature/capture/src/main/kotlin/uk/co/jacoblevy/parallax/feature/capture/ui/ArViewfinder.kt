@@ -18,7 +18,7 @@ import uk.co.jacoblevy.parallax.core.model.CaptureMode
 import uk.co.jacoblevy.parallax.feature.capture.session.ArCaptureSession
 import uk.co.jacoblevy.parallax.feature.capture.session.ArFrame
 import uk.co.jacoblevy.parallax.feature.capture.session.ArSessionFailure
-import uk.co.jacoblevy.parallax.feature.capture.session.CameraBackgroundRenderer
+import uk.co.jacoblevy.parallax.core.ar.CameraBackgroundRenderer
 import uk.co.jacoblevy.parallax.feature.capture.session.CaptureEngine
 import uk.co.jacoblevy.parallax.feature.capture.session.CaptureTick
 import java.nio.ByteBuffer

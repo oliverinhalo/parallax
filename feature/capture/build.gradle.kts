@@ -2,6 +2,7 @@ plugins { id("parallax.android.feature") }
 
 dependencies {
     implementation(projects.core.data)
+    implementation(projects.core.ar)
     implementation(projects.engine.ml)
     implementation(projects.engine.native)
 
