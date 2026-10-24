@@ -54,6 +54,18 @@ object CrashReporter {
     fun lastReport(context: Context): String? =
         file(context).takeIf(File::exists)?.runCatching { readText() }?.getOrNull()
 
+    /**
+     * Shows an unread report from a previous run, if there is one, and says whether it did.
+     *
+     * The caller is expected to stop what it was doing when this returns true: the screen is
+     * the whole point of the launch, and starting the app behind it would leave the user
+     * looking at a crash report with a half-built app underneath.
+     */
+    fun showStoredReport(context: Context): Boolean {
+        val report = lastReport(context) ?: return false
+        return runCatching { show(context, report) }.isSuccess
+    }
+
     /** Forgets the stored report, once the user has seen it. */
     fun clear(context: Context) {
         runCatching { file(context).delete() }

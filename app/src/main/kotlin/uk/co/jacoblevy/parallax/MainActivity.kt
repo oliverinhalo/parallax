@@ -17,6 +17,7 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import uk.co.jacoblevy.parallax.core.designsystem.theme.ParallaxTheme
+import uk.co.jacoblevy.parallax.diagnostics.CrashReporter
 import uk.co.jacoblevy.parallax.navigation.ParallaxNavHost
 import uk.co.jacoblevy.parallax.navigation.ParallaxRoute
 
@@ -28,6 +29,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+
+        // Showing the crash screen from the handler is a race: the request reaches the system
+        // while the process it came from is being torn down, and the screen can be lost. The
+        // report on disk is not, so an unread one is shown on the next launch instead -- which
+        // is also the only route for a crash the handler could not show anything for at all.
+        if (CrashReporter.showStoredReport(this)) {
+            finish()
+            return
+        }
 
         // Hold the splash until the stored theme and onboarding flag are known: drawing with
         // defaults and correcting afterwards flashes the wrong theme on every cold start. The

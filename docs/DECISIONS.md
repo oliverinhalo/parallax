@@ -448,6 +448,12 @@ which ends the process as the system expects.
 startup, where the main process cannot reach a screen at all. A reporter hosted there would be
 dead before it could draw.
 
+**Why the report is also shown on the next launch.** Starting the crash screen from the handler
+is a race: the request reaches the system while the process that made it is being torn down,
+and the screen can be lost -- which is how the first crash this was built to diagnose produced
+no screen at all. The report on disk does not race, so an unread one is shown the next time the
+app is opened. That path is the reliable one; the screen from the handler is the fast one.
+
 **Why platform views and hard-coded colours.** It has to render when the app's own theme,
 resources or dependency graph are what failed, so it depends on none of them.
 

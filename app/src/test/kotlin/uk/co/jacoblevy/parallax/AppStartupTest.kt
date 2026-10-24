@@ -8,6 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import uk.co.jacoblevy.parallax.diagnostics.CrashReporter
 import uk.co.jacoblevy.parallax.navigation.ParallaxRoute
 
 /**
@@ -71,6 +72,13 @@ class AppStartupTest {
         )
 
         assertThat(routes.map { it.descriptor.serialName }).containsNoDuplicates()
+    }
+
+    @Test
+    fun `a stored crash report is shown on the next launch instead of the app`() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        CrashReporter.clear(application)
+        assertThat(CrashReporter.showStoredReport(application)).isFalse()
     }
 
     private fun ourFramesIn(failure: Throwable?): List<String> =

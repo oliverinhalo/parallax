@@ -17,6 +17,8 @@ dependencies {
     testImplementation(projects.core.testing)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
     testImplementation(libs.androidx.room.runtime)
     testImplementation(libs.androidx.room.ktx)
     testImplementation(libs.androidx.datastore.preferences)
