@@ -88,6 +88,16 @@ jobs:
         # detekt is a separate task because it is not wired into `check`.
         run: ./gradlew build detekt --no-daemon --stacktrace
 
+      - name: Upload the debug APK
+        # `build` has already assembled it. Release is unsigned here -- the
+        # signing material comes from environment variables that CI does not
+        # have -- so the debug build is the one that can actually be installed.
+        uses: actions/upload-artifact@v4
+        with:
+          name: parallax-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
       - name: Upload reports
         uses: actions/upload-artifact@v4
         if: failure()
