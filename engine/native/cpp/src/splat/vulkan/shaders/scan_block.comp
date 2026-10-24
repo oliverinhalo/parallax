@@ -1,0 +1,61 @@
+#version 450
+
+// Exclusive prefix sum over one block of the input, writing each block's total
+// to `sums` so the host can scan those in turn and add them back. Two levels
+// cover a million elements; the host recurses if it ever needs more.
+
+layout(local_size_x = 256) in;
+#define SCAN_BLOCK 512
+
+layout(set = 0, binding = 0, std430) readonly buffer Input { uint values[]; };
+layout(set = 0, binding = 1, std430) writeonly buffer Output { uint scanned[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer Sums { uint block_sum[]; };
+layout(push_constant) uniform Push { uint count; } push;
+
+shared uint shared_values[SCAN_BLOCK];
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint block = gl_WorkGroupID.x;
+  uint base = block * uint(SCAN_BLOCK);
+
+  uint a = base + thread;
+  uint b = base + thread + 256u;
+  shared_values[thread] = a < push.count ? values[a] : 0u;
+  shared_values[thread + 256u] = b < push.count ? values[b] : 0u;
+  barrier();
+
+  // Blelloch up-sweep.
+  uint offset = 1u;
+  for (uint d = uint(SCAN_BLOCK) >> 1u; d > 0u; d >>= 1u) {
+    if (thread < d) {
+      uint ai = offset * (2u * thread + 1u) - 1u;
+      uint bi = offset * (2u * thread + 2u) - 1u;
+      shared_values[bi] += shared_values[ai];
+    }
+    offset *= 2u;
+    barrier();
+  }
+
+  if (thread == 0u) {
+    block_sum[block] = shared_values[uint(SCAN_BLOCK) - 1u];
+    shared_values[uint(SCAN_BLOCK) - 1u] = 0u;
+  }
+  barrier();
+
+  // Down-sweep.
+  for (uint d = 1u; d < uint(SCAN_BLOCK); d *= 2u) {
+    offset >>= 1u;
+    if (thread < d) {
+      uint ai = offset * (2u * thread + 1u) - 1u;
+      uint bi = offset * (2u * thread + 2u) - 1u;
+      uint temporary = shared_values[ai];
+      shared_values[ai] = shared_values[bi];
+      shared_values[bi] += temporary;
+    }
+    barrier();
+  }
+
+  if (a < push.count) scanned[a] = shared_values[thread];
+  if (b < push.count) scanned[b] = shared_values[thread + 256u];
+}

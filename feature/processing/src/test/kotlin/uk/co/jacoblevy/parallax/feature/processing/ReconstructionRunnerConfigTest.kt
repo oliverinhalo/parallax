@@ -246,9 +246,53 @@ class ReconstructionRunnerConfigTest {
             "targetTriangles", "hasDevicePoses", "hasDepthMaps", "memoryBudgetBytes",
             "maxIntegrationDepth", "removeGroundPlane", "keepLargestComponent", "autoLevel",
             "buildPointCloud", "buildWatertight", "analyseRoom", "truncationMultiplier",
+            "trainSplats", "splatIterations", "splatMaxGaussians", "splatShDegree",
+            "splatImageWidth", "splatMaxViews",
         )) {
             assertThat(encoded).contains("\"$key\"")
         }
+    }
+
+    @Test
+    fun `only the presets that ask for splats get them`() {
+        for (preset in QualityPreset.entries) {
+            val config = configFor(project(CaptureMode.Object, preset))
+            assertThat(config.trainSplats).isEqualTo(preset.runSplatTraining)
+            if (!preset.runSplatTraining) continue
+            assertThat(config.splatIterations).isEqualTo(preset.splatIterations)
+            assertThat(config.splatMaxGaussians).isGreaterThan(0)
+        }
+    }
+
+    @Test
+    fun `a device with too little memory does not train splats at all`() {
+        val small = capableDevice.copy(totalRamBytes = 3L * 1024 * 1024 * 1024)
+        val config = configFor(project(CaptureMode.Object, QualityPreset.Max), small)
+        assertThat(config.trainSplats).isFalse()
+    }
+
+    @Test
+    fun `the gaussian budget follows the device's memory, capped by the preset`() {
+        val small = capableDevice.copy(totalRamBytes = 4L * 1024 * 1024 * 1024)
+        val large = capableDevice.copy(totalRamBytes = 16L * 1024 * 1024 * 1024)
+        val project = project(CaptureMode.Object, QualityPreset.Max)
+
+        val lean = configFor(project, small).splatMaxGaussians
+        val generous = configFor(project, large).splatMaxGaussians
+        assertThat(lean).isLessThan(generous)
+        // Four copies of the cloud have to fit in the budget, so the count has
+        // to be well under what the preset would like on a 4 GB device.
+        assertThat(lean).isLessThan(QualityPreset.Max.splatMaxGaussians)
+        assertThat(generous).isAtMost(QualityPreset.Max.splatMaxGaussians)
+    }
+
+    @Test
+    fun `a device without Vulkan compute trains fewer harmonic bands`() {
+        val project = project(CaptureMode.Object, QualityPreset.Max)
+        val withGpu = capableDevice.copy(supportsVulkanCompute = true)
+        val withoutGpu = capableDevice.copy(supportsVulkanCompute = false)
+        assertThat(configFor(project, withGpu).splatShDegree)
+            .isGreaterThan(configFor(project, withoutGpu).splatShDegree)
     }
 
     @Test

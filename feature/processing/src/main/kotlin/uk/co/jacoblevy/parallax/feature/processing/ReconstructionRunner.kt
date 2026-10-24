@@ -180,8 +180,9 @@ class ReconstructionRunner @Inject constructor(
             }
             if (resolved.pointCount > 0) add(OutputKind.PointCloud)
             if (resolved.hasFloorPlan) add(OutputKind.FloorPlan)
-            // Splats are produced by a later, separate job; the mesh path never sets this.
-            if (storage.outputFile(project.id, ProjectStorage.SPLAT_SPZ).isFile) {
+            if (resolved.splatCount > 0 ||
+                storage.outputFile(project.id, ProjectStorage.SPLAT_PLY).isFile
+            ) {
                 add(OutputKind.Splat)
             }
         }
@@ -197,6 +198,7 @@ class ReconstructionRunner @Inject constructor(
                 triangleCount = resolved.triangleCount,
                 vertexCount = resolved.vertexCount,
                 pointCount = resolved.pointCount,
+                splatCount = resolved.splatCount,
                 surfaceAreaSquareMetres = resolved.surfaceAreaM2,
                 volumeCubicMetres = resolved.volumeM3,
                 boundsMetres = resolved.bounds.toBoundingBox(),
@@ -266,7 +268,32 @@ class ReconstructionRunner @Inject constructor(
             buildPointCloud = true,
             buildWatertight = true,
             analyseRoom = mode == CaptureMode.Room,
+            trainSplats = preset.runSplatTraining && capabilities.canTrainSplats,
+            splatIterations = preset.splatIterations,
+            splatMaxGaussians = splatBudgetFor(preset, capabilities),
+            // Degree two is where view-dependent shading stops paying for
+            // itself on a phone: degree three nearly doubles the parameter
+            // count for highlights a hand-held capture rarely resolves.
+            splatShDegree = if (capabilities.splatsTrainOnGpu) 2 else 1,
+            splatImageWidth = SPLAT_TRAINING_WIDTH,
+            splatMaxViews = SPLAT_MAX_TRAINING_VIEWS,
         )
+    }
+
+    /**
+     * How many gaussians this device can hold.
+     *
+     * The preset says what the quality level wants; the device's splat memory
+     * budget says what it can have. The smaller wins, with a floor below which
+     * a splat field is not worth producing at all.
+     */
+    private fun splatBudgetFor(preset: QualityPreset, capabilities: DeviceCapabilities): Int {
+        if (preset.splatMaxGaussians <= 0) return 0
+        val affordable = capabilities.splatMemoryBudgetBytes / SPLAT_BYTES_EACH
+        return affordable
+            .coerceAtMost(preset.splatMaxGaussians.toLong())
+            .coerceAtLeast(MIN_GAUSSIANS.toLong())
+            .toInt()
     }
 
     /**
@@ -310,6 +337,29 @@ class ReconstructionRunner @Inject constructor(
         const val ROOM_INTEGRATION_DEPTH_M = 6f
         const val AREA_INTEGRATION_DEPTH_M = 12f
         const val IMPORT_INTEGRATION_DEPTH_M = 5f
+
+        /**
+         * Width the training views are downscaled to.
+         *
+         * A splat field resolves detail from having many views rather than
+         * large ones, and full-resolution frames cost memory the optimiser
+         * needs for gaussians. 512 is about where more pixels stop improving
+         * the result on a hand-held capture.
+         */
+        const val SPLAT_TRAINING_WIDTH = 512
+        const val SPLAT_MAX_TRAINING_VIEWS = 80
+
+        /**
+         * Bytes the optimiser holds per gaussian.
+         *
+         * At degree two a gaussian is 38 floats, and training keeps four
+         * copies of each: the value, its gradient and both Adam moments. That
+         * is 608 bytes, plus about 150 for the projected state, the
+         * screen-space gradient accumulator and the splat's share of the sort
+         * keys.
+         */
+        const val SPLAT_BYTES_EACH = 760
+        const val MIN_GAUSSIANS = 20_000
     }
 }
 
@@ -334,6 +384,12 @@ internal data class PipelineConfigJson(
     val buildWatertight: Boolean,
     val analyseRoom: Boolean,
     val truncationMultiplier: Float = 4f,
+    val trainSplats: Boolean = false,
+    val splatIterations: Int = 5_000,
+    val splatMaxGaussians: Int = 180_000,
+    val splatShDegree: Int = 2,
+    val splatImageWidth: Int = 512,
+    val splatMaxViews: Int = 80,
 )
 
 @Serializable
@@ -355,6 +411,9 @@ internal data class PipelineSummaryJson(
     val triangleCount: Long = 0,
     val vertexCount: Long = 0,
     val pointCount: Long = 0,
+    val splatCount: Long = 0,
+    /** Which backend trained the splats: "gpu", "cpu", or empty if none did. */
+    val splatBackend: String = "",
     val surfaceAreaM2: Double = 0.0,
     val volumeM3: Double = 0.0,
     val watertight: Boolean = false,

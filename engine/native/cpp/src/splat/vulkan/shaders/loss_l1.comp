@@ -1,0 +1,53 @@
+#version 450
+
+// The L1 half of the photometric loss and its gradient, plus a workgroup-level
+// reduction of the scalar so the host gets one number per iteration without a
+// second dispatch. Mirrors photometricLoss() in src/splat/SplatRaster.cpp.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Rendered { float rendered[]; };
+layout(set = 0, binding = 1, std430) readonly buffer Target { float target[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer Gradient { float dL_drgb[]; };
+layout(set = 0, binding = 3, std430) buffer Totals { uint total[]; };
+
+layout(push_constant) uniform Push {
+  uint value_count;   ///< width * height * 3
+  float ssim_weight;
+  uint total_slot;
+} push;
+
+shared float partial[256];
+
+void main() {
+  uint index = gl_GlobalInvocationID.x;
+  uint thread = gl_LocalInvocationID.x;
+  float inverse = 1.0 / float(push.value_count);
+
+  float contribution = 0.0;
+  if (index < push.value_count) {
+    float difference = rendered[index] - target[index];
+    contribution = abs(difference) * inverse;
+    float sign_of = difference > 0.0 ? 1.0 : (difference < 0.0 ? -1.0 : 0.0);
+    dL_drgb[index] = (1.0 - push.ssim_weight) * sign_of * inverse;
+  }
+
+  partial[thread] = contribution;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (thread < stride) partial[thread] += partial[thread + stride];
+    barrier();
+  }
+  if (thread != 0u) return;
+
+  // One compare-and-swap per workgroup rather than one per value.
+  uint slot = push.total_slot;
+  uint expected = total[slot];
+  uint desired = floatBitsToUint(uintBitsToFloat(expected) + partial[0]);
+  uint previous = atomicCompSwap(total[slot], expected, desired);
+  while (previous != expected) {
+    expected = previous;
+    desired = floatBitsToUint(uintBitsToFloat(expected) + partial[0]);
+    previous = atomicCompSwap(total[slot], expected, desired);
+  }
+}

@@ -4,6 +4,8 @@
 
 #include <cstring>
 #include <fstream>
+#include <algorithm>
+#include <cmath>
 
 namespace parallax {
 namespace {
@@ -289,6 +291,48 @@ GrayBuffer toGray(const ColorBuffer& image) {
     }
   }
   return gray;
+}
+
+}  // namespace parallax
+
+namespace parallax {
+
+ColorBuffer downscaleToWidth(const ColorBuffer& image, int target_width) {
+  if (image.empty() || target_width <= 0 || image.width <= target_width) return image;
+  const int width = target_width;
+  const int height = std::max(1, static_cast<int>(std::lround(
+                                     static_cast<double>(image.height) * width / image.width)));
+  ColorBuffer out(width, height);
+  const uint8_t* source = image.pixels.data();
+  uint8_t* destination = out.pixels.data();
+
+  for (int y = 0; y < height; ++y) {
+    const int y0 = static_cast<int>(static_cast<int64_t>(y) * image.height / height);
+    const int y1 = std::max(y0 + 1, static_cast<int>(static_cast<int64_t>(y + 1) * image.height /
+                                                     height));
+    for (int x = 0; x < width; ++x) {
+      const int x0 = static_cast<int>(static_cast<int64_t>(x) * image.width / width);
+      const int x1 =
+          std::max(x0 + 1, static_cast<int>(static_cast<int64_t>(x + 1) * image.width / width));
+      int sums[3] = {0, 0, 0};
+      int taken = 0;
+      for (int sy = y0; sy < y1 && sy < image.height; ++sy) {
+        for (int sx = x0; sx < x1 && sx < image.width; ++sx) {
+          const size_t offset = (static_cast<size_t>(sy) * image.width + sx) * 3;
+          sums[0] += source[offset + 0];
+          sums[1] += source[offset + 1];
+          sums[2] += source[offset + 2];
+          ++taken;
+        }
+      }
+      const size_t out_offset = (static_cast<size_t>(y) * width + x) * 3;
+      for (int c = 0; c < 3; ++c) {
+        destination[out_offset + c] =
+            static_cast<uint8_t>(taken > 0 ? (sums[c] + taken / 2) / taken : 0);
+      }
+    }
+  }
+  return out;
 }
 
 }  // namespace parallax

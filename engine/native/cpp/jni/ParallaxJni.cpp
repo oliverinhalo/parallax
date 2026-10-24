@@ -106,6 +106,12 @@ PipelineConfig parseConfig(const std::string& json_text, bool* ok) {
   config.build_point_cloud = json.get("buildPointCloud").asBool(true);
   config.build_watertight = json.get("buildWatertight").asBool(true);
   config.analyse_room = json.get("analyseRoom").asBool(false);
+  config.train_splats = json.get("trainSplats").asBool(false);
+  config.splat_iterations = static_cast<int>(json.get("splatIterations").asInt(5000));
+  config.splat_max_gaussians = static_cast<int>(json.get("splatMaxGaussians").asInt(180000));
+  config.splat_sh_degree = static_cast<int>(json.get("splatShDegree").asInt(2));
+  config.splat_image_width = static_cast<int>(json.get("splatImageWidth").asInt(512));
+  config.splat_max_views = static_cast<int>(json.get("splatMaxViews").asInt(80));
 
   *ok = !config.project_dir.empty();
   return config;
@@ -120,6 +126,8 @@ std::string summaryToJson(const PipelineSummary& summary) {
   json.set("triangleCount", Json::integer(summary.triangle_count));
   json.set("vertexCount", Json::integer(summary.vertex_count));
   json.set("pointCount", Json::integer(summary.point_count));
+  json.set("splatCount", Json::integer(summary.splat_count));
+  json.set("splatBackend", Json::string(summary.splat_backend));
   json.set("surfaceAreaM2", Json::number(summary.surface_area_m2));
   json.set("volumeM3", Json::number(summary.volume_m3));
   json.set("watertight", Json::boolean(summary.watertight));

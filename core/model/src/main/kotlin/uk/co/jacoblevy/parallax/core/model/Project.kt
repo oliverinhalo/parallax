@@ -96,13 +96,14 @@ sealed interface ProjectStatus {
 @Serializable
 enum class ReconstructionStage(val label: String, val weight: Float) {
     Ingest("Reading frames", 0.04f),
-    PoseRefinement("Refining camera positions", 0.16f),
-    Depth("Estimating depth", 0.20f),
-    Fusion("Fusing surfaces", 0.18f),
-    Meshing("Building the mesh", 0.10f),
-    MeshCleanup("Cleaning up geometry", 0.06f),
-    Texturing("Painting textures", 0.14f),
+    PoseRefinement("Refining camera positions", 0.14f),
+    Depth("Estimating depth", 0.18f),
+    Fusion("Fusing surfaces", 0.16f),
+    Meshing("Building the mesh", 0.09f),
+    MeshCleanup("Cleaning up geometry", 0.05f),
+    Texturing("Painting textures", 0.12f),
     PointCloud("Building the point cloud", 0.04f),
+    SplatTraining("Training the splat field", 0.10f),
     RoomAnalysis("Measuring the room", 0.03f),
     Finalise("Finishing up", 0.05f),
     ;
@@ -171,6 +172,10 @@ enum class QualityPreset(
     val textureResolution: Int,
     val targetTriangles: Int,
     val runSplatTraining: Boolean,
+    /** Gradient-descent iterations for the splat field, when it is trained. */
+    val splatIterations: Int,
+    /** Ceiling on the gaussian count, before the device's memory budget. */
+    val splatMaxGaussians: Int,
     /** Rough seconds per keyframe on a mid-range 2024 device. Used for the ETA. */
     val secondsPerKeyframe: Float,
 ) {
@@ -181,6 +186,8 @@ enum class QualityPreset(
         textureResolution = 2048,
         targetTriangles = 80_000,
         runSplatTraining = false,
+        splatIterations = 0,
+        splatMaxGaussians = 0,
         secondsPerKeyframe = 0.9f,
     ),
     Balanced(
@@ -190,6 +197,8 @@ enum class QualityPreset(
         textureResolution = 4096,
         targetTriangles = 300_000,
         runSplatTraining = true,
+        splatIterations = 4_000,
+        splatMaxGaussians = 150_000,
         secondsPerKeyframe = 2.1f,
     ),
     Max(
@@ -199,6 +208,8 @@ enum class QualityPreset(
         textureResolution = 8192,
         targetTriangles = 1_200_000,
         runSplatTraining = true,
+        splatIterations = 9_000,
+        splatMaxGaussians = 260_000,
         secondsPerKeyframe = 5.4f,
     ),
     ;

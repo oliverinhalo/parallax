@@ -35,4 +35,15 @@ bool readFileText(const std::string& path, std::string* out);
 /// Rec.601 luma conversion, matching Android's YUV_420_888 Y plane.
 GrayBuffer toGray(const ColorBuffer& image);
 
+/**
+ * Box-filtered downscale to a target width, keeping the aspect ratio.
+ *
+ * Averaging over the source block rather than picking one pixel from it
+ * matters here: splat training compares a render against these images, and a
+ * point-sampled downscale keeps the sensor noise at full amplitude while
+ * throwing the signal away, so the optimiser spends gaussians fitting grain.
+ * Returns the image unchanged when it is already no wider than the target.
+ */
+ColorBuffer downscaleToWidth(const ColorBuffer& image, int target_width);
+
 }  // namespace parallax

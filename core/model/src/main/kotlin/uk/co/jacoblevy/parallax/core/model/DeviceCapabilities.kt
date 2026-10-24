@@ -58,8 +58,39 @@ data class DeviceCapabilities(
             256L * 1024 * 1024,
         )
 
+    /**
+     * Memory the splat optimiser may use.
+     *
+     * Deliberately much tighter than [reconstructionMemoryBudgetBytes]: that
+     * one sizes a TSDF volume that is allocated, filled and freed, whereas
+     * this working set is held for the whole of training while the frames,
+     * the point cloud and the renderer's own buffers are also live. A
+     * twenty-fourth of physical RAM, capped at 384 MB.
+     */
+    val splatMemoryBudgetBytes: Long
+        get() = (totalRamBytes / 24).coerceAtMost(384L * 1024 * 1024)
+
+    /**
+     * Whether a splat field can be trained at all.
+     *
+     * Memory is the hard requirement: the optimiser holds the model, its
+     * gradients and two Adam moments per parameter at once, which is four
+     * copies of a cloud that is already the largest thing the app builds.
+     */
     val canTrainSplats: Boolean
-        get() = supportsVulkanCompute && totalRamBytes >= 6L * 1024 * 1024 * 1024
+        get() = totalRamBytes >= 4L * 1024 * 1024 * 1024
+
+    /**
+     * Whether splat training will run on the GPU.
+     *
+     * Without Vulkan compute it falls back to the CPU reference, which is
+     * correct but far slower, so the schedule is cut to a fifth of the
+     * iterations and a third of the gaussians. The result is a usable splat
+     * field rather than none, and the settings screen says so rather than
+     * letting the difference come as a surprise.
+     */
+    val splatsTrainOnGpu: Boolean
+        get() = canTrainSplats && supportsVulkanCompute && totalRamBytes >= 6L * 1024 * 1024 * 1024
 
     /** Every reason some feature is unavailable, for the settings screen to list. */
     val limitations: List<DeviceLimitation>
@@ -88,12 +119,21 @@ data class DeviceCapabilities(
                 add(
                     DeviceLimitation(
                         title = "Gaussian splatting unavailable",
-                        detail = if (!supportsVulkanCompute) {
-                            "Vulkan compute is not supported."
-                        } else {
-                            "At least 6 GB of RAM is needed to train splats."
-                        },
+                        detail = "At least 4 GB of RAM is needed to train splats.",
                         affects = "Meshes and point clouds work normally.",
+                    ),
+                )
+            } else if (!splatsTrainOnGpu) {
+                add(
+                    DeviceLimitation(
+                        title = "Gaussian splatting runs on the CPU",
+                        detail = if (!supportsVulkanCompute) {
+                            "Vulkan compute is not supported on this device."
+                        } else {
+                            "At least 6 GB of RAM is needed for GPU splat training."
+                        },
+                        affects = "Splat scans still work, but take considerably longer and " +
+                            "come out with less detail.",
                     ),
                 )
             }

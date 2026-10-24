@@ -1,5 +1,7 @@
 #include "parallax/splat/SplatTrainer.h"
 
+#include "parallax/splat/SplatDensify.h"
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -151,6 +153,9 @@ struct SplatTrainer::Impl {
   std::vector<float> accumulated_gradient;
   std::vector<int> accumulated_views;
 
+  /// Advanced by every split, so a run is reproducible end to end.
+  uint32_t densify_rng = 1u;
+
   /// Shuffled view order, reshuffled each epoch so no view is starved.
   std::vector<int> order;
   size_t order_cursor = 0;
@@ -162,6 +167,7 @@ struct SplatTrainer::Impl {
         config(cfg),
         backend(chosen != nullptr ? std::move(chosen) : makeCpuSplatBackend()),
         rng(cfg.seed) {
+    densify_rng = cfg.seed == 0u ? 1u : cfg.seed;
     extent = cameraExtent(views);
     rest_stride = cloud.gaussians.empty() ? 0 : static_cast<int>(cloud.gaussians.front().sh_rest.size());
     resizeState();
@@ -256,136 +262,40 @@ struct SplatTrainer::Impl {
     }
   }
 
-  /// Remove the gaussians `keep` marks false, carrying the optimiser state and
-  /// the densification statistics with them.
-  void compact(const std::vector<bool>& keep) {
-    const size_t n = count();
-    size_t write = 0;
-    for (size_t read = 0; read < n; ++read) {
-      if (!keep[read]) continue;
-      if (write != read) {
-        cloud.gaussians[write] = cloud.gaussians[read];
-        accumulated_gradient[write] = accumulated_gradient[read];
-        accumulated_views[write] = accumulated_views[read];
-        moveState(read, write);
+  /// Rebuild the optimiser state after densification, carrying each surviving
+  /// gaussian's moments with it and starting the new ones from zero.
+  void remapState(const std::vector<int>& source) {
+    const auto remap = [&](AdamState* state, size_t stride) {
+      AdamState next;
+      next.first.assign(source.size() * stride, 0.f);
+      next.second.assign(source.size() * stride, 0.f);
+      for (size_t i = 0; i < source.size(); ++i) {
+        if (source[i] < 0) continue;
+        const size_t from = static_cast<size_t>(source[i]) * stride;
+        for (size_t k = 0; k < stride; ++k) {
+          next.first[i * stride + k] = state->first[from + k];
+          next.second[i * stride + k] = state->second[from + k];
+        }
       }
-      ++write;
-    }
-    cloud.gaussians.resize(write);
-    accumulated_gradient.resize(write);
-    accumulated_views.resize(write);
-    truncateState(write);
-  }
-
-  void moveState(size_t from, size_t to) {
-    const auto move = [&](AdamState* state, size_t stride) {
-      for (size_t k = 0; k < stride; ++k) {
-        state->first[to * stride + k] = state->first[from * stride + k];
-        state->second[to * stride + k] = state->second[from * stride + k];
-      }
+      *state = std::move(next);
     };
-    move(&adam_position, 3);
-    move(&adam_log_scale, 3);
-    move(&adam_rotation, 4);
-    move(&adam_opacity, 1);
-    move(&adam_dc, 3);
-    if (rest_stride > 0) move(&adam_sh_rest, static_cast<size_t>(rest_stride));
-  }
-
-  void truncateState(size_t n) {
-    adam_position.resize(n * 3);
-    adam_log_scale.resize(n * 3);
-    adam_rotation.resize(n * 4);
-    adam_opacity.resize(n);
-    adam_dc.resize(n * 3);
-    adam_sh_rest.resize(n * static_cast<size_t>(rest_stride));
-  }
-
-  void appendState(size_t added) {
-    adam_position.append(added * 3);
-    adam_log_scale.append(added * 3);
-    adam_rotation.append(added * 4);
-    adam_opacity.append(added);
-    adam_dc.append(added * 3);
-    adam_sh_rest.append(added * static_cast<size_t>(rest_stride));
-    accumulated_gradient.insert(accumulated_gradient.end(), added, 0.f);
-    accumulated_views.insert(accumulated_views.end(), added, 0);
-  }
-
-  /// Mean screen-space gradient per gaussian since the last densify pass.
-  float meanGradient(size_t g) const {
-    const int views_seen = accumulated_views[g];
-    return views_seen > 0 ? accumulated_gradient[g] / static_cast<float>(views_seen) : 0.f;
+    remap(&adam_position, 3);
+    remap(&adam_log_scale, 3);
+    remap(&adam_rotation, 4);
+    remap(&adam_opacity, 1);
+    remap(&adam_dc, 3);
+    if (rest_stride > 0) remap(&adam_sh_rest, static_cast<size_t>(rest_stride));
   }
 
   void densifyAndPrune() {
-    const size_t before = count();
-    const float size_threshold = config.percent_dense * extent;
-    const int room = config.max_gaussians - static_cast<int>(before);
-
-    std::vector<Gaussian> clones;
-    std::vector<size_t> split_sources;
-    if (room > 0) {
-      for (size_t g = 0; g < before; ++g) {
-        if (meanGradient(g) < config.densify_grad_threshold) continue;
-        const float largest = cloud.gaussians[g].log_scale.array().exp().maxCoeff();
-        if (largest <= size_threshold) {
-          // Under-reconstruction: the gaussian is too small for the detail it
-          // is being asked to carry, so a copy is placed beside it.
-          clones.push_back(cloud.gaussians[g]);
-        } else {
-          split_sources.push_back(g);
-        }
-      }
-    }
-
-    // Splitting replaces one wide gaussian with two narrower ones drawn from
-    // its own distribution, which is what lets a blurry blob resolve.
-    std::vector<Gaussian> children;
-    std::vector<bool> keep(before, true);
-    for (size_t g : split_sources) {
-      const Gaussian& parent = cloud.gaussians[g];
-      const Vec3f scale = parent.log_scale.array().exp();
-      const Eigen::Matrix3f rotation = parent.rotation.normalized().toRotationMatrix();
-      for (int child = 0; child < 2; ++child) {
-        Gaussian next = parent;
-        const Vec3f sample(rng.normal() * scale.x(), rng.normal() * scale.y(),
-                           rng.normal() * scale.z());
-        next.position = parent.position + rotation * sample;
-        next.log_scale = parent.log_scale.array() - std::log(config.split_scale_divider);
-        children.push_back(std::move(next));
-      }
-      keep[g] = false;
-    }
-
-    size_t added = 0;
-    for (std::vector<Gaussian>* batch : {&clones, &children}) {
-      for (Gaussian& g : *batch) {
-        if (static_cast<int>(count()) >= config.max_gaussians) break;
-        cloud.gaussians.push_back(std::move(g));
-        ++added;
-      }
-    }
-    keep.resize(cloud.gaussians.size(), true);
-    appendState(added);
-
-    // Prune: transparent gaussians always, oversized ones once densification
-    // has had time to settle (early on a large gaussian is often correct).
-    const bool prune_oversized = iteration > config.opacity_reset_interval;
-    const float max_scale = config.prune_scale_fraction * extent;
-    for (size_t g = 0; g < cloud.gaussians.size(); ++g) {
-      if (!keep[g]) continue;
-      const Gaussian& gaussian = cloud.gaussians[g];
-      if (gaussianOpacity(gaussian) < config.prune_opacity) {
-        keep[g] = false;
-      } else if (prune_oversized && gaussian.log_scale.array().exp().maxCoeff() > max_scale) {
-        keep[g] = false;
-      }
-    }
-    compact(keep);
-
-    std::fill(accumulated_gradient.begin(), accumulated_gradient.end(), 0.f);
-    std::fill(accumulated_views.begin(), accumulated_views.end(), 0);
+    SplatDensifyStats statistics;
+    statistics.screen_gradient = accumulated_gradient;
+    statistics.visible_count = accumulated_views;
+    const SplatDensifyResult result = parallax::densifyAndPrune(
+        &cloud, statistics, config, extent, iteration, &densify_rng);
+    remapState(result.source_index);
+    accumulated_gradient.assign(count(), 0.f);
+    accumulated_views.assign(count(), 0);
   }
 
   void resetOpacity() {

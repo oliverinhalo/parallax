@@ -8,6 +8,7 @@
 #include "parallax/io/ImageIo.h"
 #include "parallax/io/Json.h"
 #include "parallax/testing/SyntheticScene.h"
+#include "parallax/splat/GaussianCloud.h"
 
 using namespace parallax;
 using namespace parallax::testing;
@@ -572,4 +573,69 @@ TEST(Pipeline, RoomModeProducesAFloorPlan) {
     EXPECT_TRUE(plan.valid());
     EXPECT_GE(plan.walls.size(), 3u);
   }
+}
+
+TEST(Pipeline, TrainsASplatFieldWhenAskedTo) {
+  // The splat stage is off by default and this is the only test that turns it
+  // on, so the schedule is cut right back: the point is that the stage runs,
+  // writes a loadable field and improves on its initialisation, not that a
+  // 160-pixel synthetic orbit trains to a beautiful model.
+  SyntheticCapture capture;
+  capture.writeObjectCapture(12, 128);
+
+  PipelineConfig config;
+  config.project_dir = capture.path();
+  config.mode = CaptureMode::Object;
+  config.voxel_size = 0.01f;
+  config.remove_ground_plane = true;
+  config.keep_largest_component = true;
+  config.max_integration_depth = 1.6f;
+  config.train_splats = true;
+  config.splat_iterations = 60;
+  config.splat_max_gaussians = 4000;
+  config.splat_sh_degree = 0;
+  config.splat_image_width = 64;
+  config.splat_max_views = 6;
+
+  Pipeline pipeline(config);
+  const StageOutcome outcome = pipeline.runToCompletion(nullptr, nullptr);
+  ASSERT_TRUE(outcome.success) << outcome.message;
+
+  const PipelineSummary summary = pipeline.summary();
+  EXPECT_GT(summary.splat_count, 0);
+  // The host build has no Vulkan, so the fallback is what ran. On a device the
+  // same stage reports "gpu"; either way it must say which.
+  EXPECT_EQ("cpu", summary.splat_backend);
+
+  const fs::path splat = fs::path(capture.path()) / "outputs" / "splat.ply";
+  ASSERT_TRUE(fs::exists(splat)) << splat.string();
+  GaussianCloud cloud;
+  std::string error;
+  ASSERT_TRUE(readGaussianPly(splat.string(), &cloud, &error)) << error;
+  EXPECT_EQ(static_cast<size_t>(summary.splat_count), cloud.size());
+  std::string reason;
+  EXPECT_TRUE(cloud.isValid(&reason)) << reason;
+
+  // Every gaussian should have survived the final prune, so none is invisible.
+  for (const Gaussian& gaussian : cloud.gaussians) {
+    EXPECT_GE(gaussianOpacity(gaussian), 0.0045f);
+  }
+}
+
+TEST(Pipeline, TheSplatStageIsSkippedCleanlyWhenItIsNotWanted) {
+  SyntheticCapture capture;
+  capture.writeObjectCapture(10, 112);
+
+  PipelineConfig config;
+  config.project_dir = capture.path();
+  config.mode = CaptureMode::Object;
+  config.voxel_size = 0.012f;
+  config.max_integration_depth = 1.6f;
+  config.train_splats = false;
+
+  Pipeline pipeline(config);
+  ASSERT_TRUE(pipeline.runToCompletion(nullptr, nullptr).success);
+  EXPECT_EQ(0, pipeline.summary().splat_count);
+  EXPECT_TRUE(pipeline.summary().splat_backend.empty());
+  EXPECT_FALSE(fs::exists(fs::path(capture.path()) / "outputs" / "splat.ply"));
 }

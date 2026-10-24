@@ -1,0 +1,82 @@
+#version 450
+
+// The placement half of one radix pass.
+//
+// Each block first sorts its own 256 elements by the digit, stably, with four
+// single-bit splits in shared memory. Stability is the whole point: the sort
+// runs from the low bits upwards, so a pass that reordered equal digits would
+// undo every pass before it.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer KeysIn { uint key_in[]; };
+layout(set = 0, binding = 1, std430) readonly buffer ValuesIn { uint value_in[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Offsets { uint digit_offset[]; };
+layout(set = 0, binding = 3, std430) writeonly buffer KeysOut { uint key_out[]; };
+layout(set = 0, binding = 4, std430) writeonly buffer ValuesOut { uint value_out[]; };
+layout(push_constant) uniform Push {
+  /// Padded to a multiple of 256 by the host, which fills the tail with
+  /// 0xFFFFFFFF so that padding sorts to the end and is counted identically
+  /// by the histogram pass.
+  uint count;
+  uint shift;
+  uint block_count;
+} push;
+
+shared uint shared_key[256];
+shared uint shared_value[256];
+shared uint shared_scan[256];
+#define RADIX_DIGITS 16
+
+shared uint shared_start[RADIX_DIGITS];
+
+/// Inclusive Hillis-Steele scan of shared_scan, returning this thread's value.
+uint inclusiveScan(uint value) {
+  shared_scan[gl_LocalInvocationID.x] = value;
+  barrier();
+  for (uint stride = 1u; stride < 256u; stride <<= 1u) {
+    uint addend = gl_LocalInvocationID.x >= stride ? shared_scan[gl_LocalInvocationID.x - stride] : 0u;
+    barrier();
+    shared_scan[gl_LocalInvocationID.x] += addend;
+    barrier();
+  }
+  return shared_scan[gl_LocalInvocationID.x];
+}
+
+void main() {
+  uint thread = gl_LocalInvocationID.x;
+  uint block = gl_WorkGroupID.x;
+  uint index = block * 256u + thread;
+
+  // Padding sorts to the very end and is dropped by the consumer.
+  shared_key[thread] = index < push.count ? key_in[index] : 0xFFFFFFFFu;
+  shared_value[thread] = index < push.count ? value_in[index] : 0xFFFFFFFFu;
+  barrier();
+
+  for (uint bit = 0u; bit < 4u; ++bit) {
+    uint digit_bit = (shared_key[thread] >> (push.shift + bit)) & 1u;
+    uint ones_before = inclusiveScan(digit_bit) - digit_bit;
+    uint total_ones = shared_scan[255];
+    uint total_zeros = 256u - total_ones;
+    uint destination = digit_bit == 1u ? total_zeros + ones_before : thread - ones_before;
+
+    uint moved_key = shared_key[thread];
+    uint moved_value = shared_value[thread];
+    barrier();
+    shared_key[destination] = moved_key;
+    shared_value[destination] = moved_value;
+    barrier();
+  }
+
+  // The block is now grouped by digit; find where each group begins.
+  uint digit = (shared_key[thread] >> push.shift) & 0xFu;
+  uint previous = thread == 0u ? 0xFFFFFFFFu : ((shared_key[thread - 1u] >> push.shift) & 0xFu);
+  if (thread == 0u || digit != previous) shared_start[digit] = thread;
+  barrier();
+
+  uint destination = digit_offset[digit * push.block_count + block] + (thread - shared_start[digit]);
+  if (destination < push.count) {
+    key_out[destination] = shared_key[thread];
+    value_out[destination] = shared_value[thread];
+  }
+}

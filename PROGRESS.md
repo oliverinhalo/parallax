@@ -310,9 +310,45 @@ a few million.
 
 ---
 
+## Phase 8 — Gaussian splatting ✅
+
+**The mathematics is written twice, and the version that can be tested is the
+one that defines the other.** `SplatRaster.cpp` is the EWA projection, the
+tile-binned front-to-back compositing, the analytic backward pass for every
+parameter, SSIM and the photometric loss. `SplatTrainer.cpp` is Adam and the
+schedule; `SplatDensify.cpp` is adaptive density control. Sixteen compute
+shaders under `src/splat/vulkan/shaders/` implement the same equations for the
+device, and each names its host counterpart at the top of the file.
+
+**Every gradient is checked against central differences**, scored with a
+linear functional of the pixels rather than L1, so the objective is smooth and
+the check tests the rasteriser rather than the loss. The trainer is checked by
+holding a camera out of the training set and requiring the error on that
+unseen view to halve — a claim about the geometry, not about memorising the
+training images. The whole stage is then exercised through the real pipeline on
+a synthetic orbit, from point cloud to a loadable `splat.ply`.
+
+**The GPU path is the shipping path; the CPU path is the floor.**
+`trainSplatsOnGpu` returns false rather than failing when Vulkan is missing,
+too old, out of memory or lost, and the pipeline falls back to the CPU trainer
+on a fifth of the iterations with a third of the gaussians. See
+`docs/DECISIONS.md` (ADR-009) for why that replaced the original "no fallback"
+decision, and for what is and is not verified about the shaders.
+
+### Bugs this phase's tests caught
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| The SSIM blur clamped at the image edge | The corner of the gradient was 40% wrong and nothing else was | The gradient applies the same blur as its own adjoint, which only holds for a symmetric kernel over a zero-padded domain. Clamping folds the out-of-bounds weight onto the border, whose adjoint is a different operator |
+| The quaternion gradient ignored normalisation | Rotations trained to the wrong shape, for some gaussians and not others | The forward pass normalises the quaternion; the backward pass did not push the gradient back through that, leaving the component along the quaternion itself wrong |
+| The clamped-frustum derivative was double-counted | Gaussians near the edge of the frame drifted in depth | Once a coordinate is clamped into the widened frustum the projection Jacobian's z-derivative halves, and the unclamped expression was used for both cases |
+| The tile-culling radius was floored at 0.1 | Near-isotropic splats pulled in tiles they could not reach | A guard meant to keep a square root non-negative had been raised to a comfortable-looking constant, which inflated the eigenvalue spread of every circular splat |
+| A preset that trains no splats crashed the budget | `Cannot coerce value to an empty range` on the Fast preset | The gaussian budget clamped the device's affordable count into the preset's range without first asking whether the preset wanted splats at all |
+
+---
+
 ## Remaining phases
 
-- [ ] **Phase 8 — Gaussian splatting**: Vulkan compute training and renderer
 - [ ] **Phase 10 — Viewer**: Filament, render modes, measurement, editing,
       annotations, walk mode
 - [ ] **Phase 11 — Export UI, AR placement, offline HTML viewer**
@@ -325,8 +361,8 @@ a few million.
 
 Stated plainly so nothing here is mistaken for more than it is.
 
-**Verified by tests that run in this repo:** 281 native gtest assertions and
-280 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
+**Verified by tests that run in this repo:** 313 native gtest assertions and
+285 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
 release minification and APK packaging.
 
 The capture *logic* is covered — coverage accumulation, guidance priority and
@@ -339,7 +375,11 @@ GPU, no ARCore service):
 
 - ARCore pose/depth/plane behaviour and anything built on it
 - Camera capture and real camera intrinsics
-- Vulkan compute kernels and the Gaussian-splat renderer
+- The Vulkan compute shaders. They are compiled to SPIR-V as part of every
+  build, on the host as well as for Android, so a shader that stops compiling
+  breaks CI; but no shader here has ever been executed. Their arithmetic is a
+  transcription of code that is gradient-checked, and a device that cannot run
+  them falls back to that code rather than losing the feature
 - Filament rendering output
 - LiteRT model inference with GPU/NNAPI delegates
 - Real-device frame rates, thermal throttling and memory behaviour

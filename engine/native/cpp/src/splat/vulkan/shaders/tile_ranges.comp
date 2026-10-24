@@ -1,0 +1,30 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Turns the sorted key array into a [begin, end) span per tile, by spotting
+// where the tile field of the key changes. One invocation per pair.
+
+#include "common.glsl"
+#include "params.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 1, std430) readonly buffer Keys { uint pair_key[]; };
+layout(set = 0, binding = 2, std430) buffer Ranges { uint tile_range[]; };
+
+void main() {
+  uint index = gl_GlobalInvocationID.x;
+  if (index >= uint(PAIR_COUNT)) return;
+
+  uint tile = tileOfSortKey(pair_key[index]);
+  if (index == 0u) {
+    tile_range[tile * 2u] = 0u;
+  } else {
+    uint previous = tileOfSortKey(pair_key[index - 1u]);
+    if (previous != tile) {
+      tile_range[previous * 2u + 1u] = index;
+      tile_range[tile * 2u] = index;
+    }
+  }
+  if (index == uint(PAIR_COUNT) - 1u) tile_range[tile * 2u + 1u] = uint(PAIR_COUNT);
+}

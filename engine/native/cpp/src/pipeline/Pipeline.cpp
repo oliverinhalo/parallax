@@ -1,5 +1,8 @@
 #include "parallax/pipeline/Pipeline.h"
 
+#include "parallax/splat/SplatTrainer.h"
+#include "parallax/splat/VulkanSplatTrainer.h"
+
 #include <algorithm>
 #include <limits>
 #include <cmath>
@@ -162,6 +165,7 @@ const char* stageName(Stage stage) {
     case Stage::MeshCleanup: return "mesh_cleanup";
     case Stage::Texturing: return "texturing";
     case Stage::PointCloud: return "point_cloud";
+    case Stage::SplatTraining: return "splat_training";
     case Stage::RoomAnalysis: return "room_analysis";
     case Stage::Finalise: return "finalise";
     default: return "unknown";
@@ -171,13 +175,14 @@ const char* stageName(Stage stage) {
 double stageWeight(Stage stage) {
   switch (stage) {
     case Stage::Ingest: return 0.04;
-    case Stage::PoseRefinement: return 0.16;
-    case Stage::Depth: return 0.20;
-    case Stage::Fusion: return 0.18;
-    case Stage::Meshing: return 0.10;
-    case Stage::MeshCleanup: return 0.06;
-    case Stage::Texturing: return 0.14;
+    case Stage::PoseRefinement: return 0.14;
+    case Stage::Depth: return 0.18;
+    case Stage::Fusion: return 0.16;
+    case Stage::Meshing: return 0.09;
+    case Stage::MeshCleanup: return 0.05;
+    case Stage::Texturing: return 0.12;
     case Stage::PointCloud: return 0.04;
+    case Stage::SplatTraining: return 0.10;
     case Stage::RoomAnalysis: return 0.03;
     case Stage::Finalise: return 0.05;
     default: return 0.0;
@@ -215,6 +220,7 @@ struct Pipeline::Impl {
       case Stage::MeshCleanup: return checkpointDir() / "mesh_clean.ply";
       case Stage::Texturing: return checkpointDir() / "mesh_textured.ply";
       case Stage::PointCloud: return checkpointDir() / "cloud.ply";
+    case Stage::SplatTraining: return checkpointDir() / "splat.ply";
       case Stage::RoomAnalysis: return checkpointDir() / "floorplan.json";
       case Stage::Finalise: return checkpointDir() / "finalise.json";
       default: return checkpointDir() / "unknown";
@@ -240,6 +246,8 @@ struct Pipeline::Impl {
     summary.triangle_count = json.get("triangle_count").asInt();
     summary.vertex_count = json.get("vertex_count").asInt();
     summary.point_count = json.get("point_count").asInt();
+    summary.splat_count = json.get("splat_count").asInt();
+    summary.splat_backend = json.get("splat_backend").asString();
     summary.surface_area_m2 = json.get("surface_area_m2").asDouble();
     summary.volume_m3 = json.get("volume_m3").asDouble();
     summary.watertight = json.get("watertight").asBool();
@@ -266,6 +274,8 @@ struct Pipeline::Impl {
     json.set("triangle_count", Json::integer(summary.triangle_count));
     json.set("vertex_count", Json::integer(summary.vertex_count));
     json.set("point_count", Json::integer(summary.point_count));
+    json.set("splat_count", Json::integer(summary.splat_count));
+    json.set("splat_backend", Json::string(summary.splat_backend));
     json.set("surface_area_m2", Json::number(summary.surface_area_m2));
     json.set("volume_m3", Json::number(summary.volume_m3));
     json.set("watertight", Json::boolean(summary.watertight));
@@ -383,6 +393,7 @@ struct Pipeline::Impl {
   StageOutcome runMeshCleanup(const ProgressCallback& progress, const CancelToken& cancel);
   StageOutcome runTexturing(const ProgressCallback& progress, const CancelToken& cancel);
   StageOutcome runPointCloud(const ProgressCallback& progress, const CancelToken& cancel);
+  StageOutcome runSplatTraining(const ProgressCallback& progress, const CancelToken& cancel);
   StageOutcome runRoomAnalysis(const ProgressCallback& progress, const CancelToken& cancel);
   StageOutcome runFinalise(const ProgressCallback& progress, const CancelToken& cancel);
 
@@ -1563,6 +1574,142 @@ StageOutcome Pipeline::Impl::runPointCloud(const ProgressCallback& progress,
   return StageOutcome{true, false, std::to_string(points.size()) + " points"};
 }
 
+StageOutcome Pipeline::Impl::runSplatTraining(const ProgressCallback& progress,
+                                              const CancelToken& cancel) {
+  if (!config.train_splats) {
+    writeFileText(checkpointPath(Stage::SplatTraining).string(), "{\"skipped\":true}");
+    return StageOutcome{true, false, "splat training not requested"};
+  }
+
+  report(progress, Stage::SplatTraining, 0.02, "Seeding gaussians from the point cloud");
+  std::vector<Vec3f> points, normals;
+  std::vector<std::array<uint8_t, 3>> colors;
+  if (!readPlyPointCloud(checkpointPath(Stage::PointCloud).string(), &points, &normals, &colors) ||
+      points.empty()) {
+    writeFileText(checkpointPath(Stage::SplatTraining).string(), "{\"skipped\":true}");
+    return StageOutcome{true, false, "no point cloud to seed the splat field from"};
+  }
+
+  // Seeding with a quarter of the budget leaves room for densification to
+  // find the detail; seeding at the ceiling leaves it nowhere to grow.
+  const size_t seed_budget = std::max<size_t>(1, config.splat_max_gaussians / 4);
+  if (points.size() > seed_budget) {
+    const size_t step = (points.size() + seed_budget - 1) / seed_budget;
+    std::vector<Vec3f> kept_points;
+    std::vector<std::array<uint8_t, 3>> kept_colors;
+    kept_points.reserve(seed_budget);
+    kept_colors.reserve(seed_budget);
+    for (size_t i = 0; i < points.size(); i += step) {
+      kept_points.push_back(points[i]);
+      kept_colors.push_back(i < colors.size() ? colors[i] : std::array<uint8_t, 3>{128, 128, 128});
+    }
+    points.swap(kept_points);
+    colors.swap(kept_colors);
+  }
+  GaussianCloud cloud = initializeFromPointCloud(points, colors, config.splat_sh_degree);
+  if (cloud.empty()) {
+    return StageOutcome{false, false, "the point cloud produced no gaussians"};
+  }
+
+  if (!loadFrames()) return StageOutcome{false, false, "frames unavailable"};
+  std::vector<int> keyframes;
+  std::vector<Pose> poses;
+  if (!loadRefinedPoses(&keyframes, &poses)) {
+    return StageOutcome{false, false, "refined poses are missing"};
+  }
+  // The cloud came from the levelled mesh, so the cameras have to be levelled
+  // to match or every projection lands in the wrong place.
+  levelPoses(loadLevelRotation(), &poses);
+
+  const size_t view_budget =
+      std::min<size_t>(keyframes.size(), static_cast<size_t>(std::max(4, config.splat_max_views)));
+  std::vector<SplatTrainingView> views;
+  views.reserve(view_budget);
+  for (size_t v = 0; v < view_budget; ++v) {
+    if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
+    const size_t i = view_budget == 1
+                         ? 0
+                         : static_cast<size_t>(static_cast<double>(v) * (keyframes.size() - 1) /
+                                               (view_budget - 1));
+    const FrameRecord& frame = frames[keyframes[i]];
+    ColorBuffer image;
+    if (!loadImage(frame, &image) || image.empty()) continue;
+    ColorBuffer scaled = downscaleToWidth(image, config.splat_image_width);
+
+    SplatTrainingView training;
+    training.view.intrinsics = frame.intrinsics.scaledTo(scaled.width, scaled.height);
+    training.view.camera_from_world = poses[i];
+    training.image.resize(static_cast<size_t>(scaled.width) * scaled.height * 3);
+    for (size_t p = 0; p < training.image.size(); ++p) {
+      training.image[p] = static_cast<float>(scaled.pixels.data()[p]) / 255.f;
+    }
+    views.push_back(std::move(training));
+    report(progress, Stage::SplatTraining, 0.02 + 0.08 * (v + 1) / view_budget,
+           "Loading training views");
+  }
+  if (views.size() < 2) {
+    return StageOutcome{false, false, "at least two posed views are needed to train splats"};
+  }
+
+  SplatTrainingConfig training_config;
+  training_config.iterations = std::max(1, config.splat_iterations);
+  training_config.sh_degree = config.splat_sh_degree;
+  training_config.max_gaussians = config.splat_max_gaussians;
+  training_config.densify_until_iteration = training_config.iterations / 2;
+  training_config.opacity_reset_interval = std::max(1, training_config.iterations / 3);
+  training_config.sh_increase_interval = std::max(1, training_config.iterations / 8);
+  const std::string invalid = training_config.validate();
+  if (!invalid.empty()) return StageOutcome{false, false, invalid};
+
+  bool was_cancelled = false;
+  const SplatTrainingCallback callback = [&](const SplatTrainingProgress& p) {
+    if (checkCancel(cancel)) {
+      was_cancelled = true;
+      return false;
+    }
+    const double fraction =
+        0.1 + 0.85 * static_cast<double>(p.iteration) / std::max(1, p.total_iterations);
+    report(progress, Stage::SplatTraining, fraction,
+           std::to_string(p.gaussian_count) + " gaussians");
+    return true;
+  };
+
+  std::string gpu_error;
+  if (trainSplatsOnGpu(&cloud, views, training_config, callback, &gpu_error)) {
+    summary.splat_backend = "gpu";
+  } else {
+    if (was_cancelled) return StageOutcome{false, true, "cancelled"};
+    // Falling back rather than failing: a device without a usable compute
+    // path still gets a splat field, just a smaller one trained for fewer
+    // iterations than a GPU would have managed in the same time.
+    SplatTrainingConfig reduced = training_config;
+    reduced.iterations = std::max(1, training_config.iterations / 5);
+    reduced.max_gaussians = std::min(training_config.max_gaussians, 60000);
+    reduced.densify_until_iteration = reduced.iterations / 2;
+    reduced.opacity_reset_interval = std::max(1, reduced.iterations / 3);
+    reduced.sh_increase_interval = std::max(1, reduced.iterations / 8);
+    reduced.sh_degree = std::min(1, config.splat_sh_degree);
+
+    SplatTrainer trainer(std::move(cloud), std::move(views), reduced);
+    if (!trainer.train(callback)) return StageOutcome{false, true, "cancelled"};
+    cloud = trainer.finish();
+    summary.splat_backend = "cpu";
+  }
+
+  if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
+  report(progress, Stage::SplatTraining, 0.97, "Saving the splat field");
+  if (!writeGaussianPly(checkpointPath(Stage::SplatTraining).string(), cloud)) {
+    return StageOutcome{false, false, "could not write the splat field"};
+  }
+  if (!writeGaussianPly((outputDir() / "splat.ply").string(), cloud)) {
+    return StageOutcome{false, false, "could not write splat.ply"};
+  }
+  summary.splat_count = static_cast<long>(cloud.size());
+  saveSummary();
+  return StageOutcome{true, false,
+                      std::to_string(cloud.size()) + " gaussians (" + summary.splat_backend + ")"};
+}
+
 StageOutcome Pipeline::Impl::runRoomAnalysis(const ProgressCallback& progress,
                                              const CancelToken& cancel) {
   if (!config.analyse_room) {
@@ -1721,6 +1868,7 @@ StageOutcome Pipeline::runStage(Stage stage, const ProgressCallback& progress,
     case Stage::MeshCleanup: return impl_->runMeshCleanup(progress, cancel);
     case Stage::Texturing: return impl_->runTexturing(progress, cancel);
     case Stage::PointCloud: return impl_->runPointCloud(progress, cancel);
+    case Stage::SplatTraining: return impl_->runSplatTraining(progress, cancel);
     case Stage::RoomAnalysis: return impl_->runRoomAnalysis(progress, cancel);
     case Stage::Finalise: return impl_->runFinalise(progress, cancel);
     default: return StageOutcome{false, false, "unknown stage"};

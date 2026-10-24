@@ -34,9 +34,10 @@ enum class Stage {
   MeshCleanup = 5,
   Texturing = 6,
   PointCloud = 7,
-  RoomAnalysis = 8,
-  Finalise = 9,
-  Count = 10,
+  SplatTraining = 8,
+  RoomAnalysis = 9,
+  Finalise = 10,
+  Count = 11,
 };
 
 const char* stageName(Stage stage);
@@ -80,6 +81,22 @@ struct PipelineConfig {
   bool build_point_cloud = true;
   bool build_watertight = true;
   bool analyse_room = false;
+
+  /**
+   * Gaussian splatting.
+   *
+   * Off by default: it is the longest stage by a wide margin and the mesh is
+   * what most captures are actually for. `splat_image_width` is the width the
+   * training views are downscaled to -- the splat field resolves detail from
+   * having many views rather than large ones, and full-resolution frames cost
+   * memory the optimiser needs for gaussians.
+   */
+  bool train_splats = false;
+  int splat_iterations = 5000;
+  int splat_max_gaussians = 180000;
+  int splat_sh_degree = 2;
+  int splat_image_width = 512;
+  int splat_max_views = 80;
 };
 
 /// Reported as each stage advances.
@@ -110,6 +127,7 @@ struct PipelineSummary {
   long triangle_count = 0;
   long vertex_count = 0;
   long point_count = 0;
+  long splat_count = 0;
   double surface_area_m2 = 0.0;
   double volume_m3 = 0.0;
   bool watertight = false;
@@ -119,6 +137,9 @@ struct PipelineSummary {
   bool has_floor_plan = false;
   bool has_texture = false;
   double scale_factor = 1.0;
+  /// Which backend trained the splats, for the processing log: "gpu", "cpu"
+  /// or empty when the stage did not run.
+  std::string splat_backend;
 };
 
 class Pipeline {

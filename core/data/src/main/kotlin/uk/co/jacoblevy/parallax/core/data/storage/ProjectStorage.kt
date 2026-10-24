@@ -245,6 +245,15 @@ class ProjectStorage @Inject constructor(
         const val MODEL_GLB = "model.glb"
         const val CLOUD_PLY = "cloud.ply"
         const val SPLAT_SPZ = "splat.spz"
+
+        /**
+         * The trained splat field, in the reference 3DGS PLY layout.
+         *
+         * This is the one the pipeline writes and the viewer loads; `.spz` and
+         * `.splat` are produced from it on export, because they are lossy and
+         * the source should not be.
+         */
+        const val SPLAT_PLY = "splat.ply"
         const val FLOOR_PLAN_SVG = "floorplan.svg"
 
         /** Two views is the theoretical minimum for any reconstruction at all. */

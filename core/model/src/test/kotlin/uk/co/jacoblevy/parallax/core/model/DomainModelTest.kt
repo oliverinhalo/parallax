@@ -262,17 +262,35 @@ class DomainModelTest {
     }
 
     @Test
-    fun `splat training needs both Vulkan compute and enough memory`() {
+    fun `splat training needs memory, and the GPU path needs Vulkan as well`() {
         val gb = 1024L * 1024 * 1024
-        assertThat(
-            DeviceCapabilities(supportsVulkanCompute = true, totalRamBytes = 8 * gb).canTrainSplats,
-        ).isTrue()
-        assertThat(
-            DeviceCapabilities(supportsVulkanCompute = false, totalRamBytes = 8 * gb).canTrainSplats,
-        ).isFalse()
-        assertThat(
-            DeviceCapabilities(supportsVulkanCompute = true, totalRamBytes = 4 * gb).canTrainSplats,
-        ).isFalse()
+        val capable = DeviceCapabilities(supportsVulkanCompute = true, totalRamBytes = 8 * gb)
+        assertThat(capable.canTrainSplats).isTrue()
+        assertThat(capable.splatsTrainOnGpu).isTrue()
+
+        // No Vulkan compute still trains, on the CPU and on a shorter schedule.
+        val noVulkan = DeviceCapabilities(supportsVulkanCompute = false, totalRamBytes = 8 * gb)
+        assertThat(noVulkan.canTrainSplats).isTrue()
+        assertThat(noVulkan.splatsTrainOnGpu).isFalse()
+
+        // Six gigabytes is what the GPU path needs; four is enough for the CPU one.
+        val middling = DeviceCapabilities(supportsVulkanCompute = true, totalRamBytes = 5 * gb)
+        assertThat(middling.canTrainSplats).isTrue()
+        assertThat(middling.splatsTrainOnGpu).isFalse()
+
+        // Below four gigabytes the optimiser's four copies of the cloud do not fit.
+        val small = DeviceCapabilities(supportsVulkanCompute = true, totalRamBytes = 3 * gb)
+        assertThat(small.canTrainSplats).isFalse()
+        assertThat(small.splatsTrainOnGpu).isFalse()
+    }
+
+    @Test
+    fun `a preset that trains splats says how long for and how large`() {
+        for (preset in QualityPreset.entries) {
+            if (!preset.runSplatTraining) continue
+            assertThat(preset.splatIterations).isGreaterThan(0)
+            assertThat(preset.splatMaxGaussians).isGreaterThan(0)
+        }
     }
 
     @Test

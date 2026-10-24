@@ -1,0 +1,129 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Screen-space half of the backward pass, one workgroup per tile.
+//
+// Walking back to front is what lets the colour behind each gaussian be
+// reconstructed as it goes, which is what the alpha gradient needs. The
+// traversal has to reject exactly the same splats the forward pass rejected,
+// or the replayed transmittance drifts away from the one that was rendered --
+// so the two skip conditions below are deliberately identical to forward.comp.
+// Mirrors rasterizeSplatsBackward() in src/splat/SplatRaster.cpp.
+
+#include "common.glsl"
+#include "params.glsl"
+
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
+
+layout(set = 0, binding = 1, std430) readonly buffer Projected { float proj[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Ranges { uint tile_range[]; };
+layout(set = 0, binding = 3, std430) readonly buffer Values { uint pair_value[]; };
+layout(set = 0, binding = 4, std430) readonly buffer Transmittance { float transmittance[]; };
+layout(set = 0, binding = 5, std430) readonly buffer Contributors { uint contributors[]; };
+layout(set = 0, binding = 6, std430) readonly buffer LossGradient { float dL_drgb[]; };
+layout(set = 0, binding = 7, std430) buffer ScreenGradient { uint screen_gradient[]; };
+
+shared uint batch_index[256];
+shared vec2 batch_mean[256];
+shared vec4 batch_conic_opacity[256];
+shared vec3 batch_color[256];
+
+void main() {
+  uint tile = gl_WorkGroupID.y * uint(TILE_COLS) + gl_WorkGroupID.x;
+  uint thread = gl_LocalInvocationIndex;
+
+  ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+  bool inside = pixel.x < VIEW_WIDTH && pixel.y < VIEW_HEIGHT;
+  vec2 point = vec2(float(pixel.x) + 0.5, float(pixel.y) + 0.5);
+
+  uint begin = tile_range[tile * 2u];
+  uint end = tile_range[tile * 2u + 1u];
+  uint total = end > begin ? end - begin : 0u;
+  uint rounds = (total + 255u) / 256u;
+
+  uint offset = inside ? uint(pixel.y) * uint(VIEW_WIDTH) + uint(pixel.x) : 0u;
+  float final_transmittance = inside ? transmittance[offset] : 0.0;
+  uint last_contributor = inside ? contributors[offset] : 0u;
+  vec3 pixel_gradient = inside ? vec3(dL_drgb[offset * 3u], dL_drgb[offset * 3u + 1u],
+                                      dL_drgb[offset * 3u + 2u])
+                               : vec3(0.0);
+  float background_term = dot(params.background.rgb, pixel_gradient);
+
+  float running_transmittance = final_transmittance;
+  vec3 suffix = vec3(0.0);
+  vec3 last_color = vec3(0.0);
+  float last_alpha = 0.0;
+  uint cursor = total;
+
+  for (uint round = 0u; round < rounds; ++round) {
+    barrier();
+    uint fetch_rank = round * 256u + thread;
+    if (fetch_rank < total) {
+      uint pair = end - fetch_rank - 1u;
+      uint splat = pair_value[pair];
+      uint base = splat * PROJ_STRIDE;
+      batch_index[thread] = splat;
+      batch_mean[thread] = vec2(proj[base + PROJ_MEAN_X], proj[base + PROJ_MEAN_Y]);
+      batch_conic_opacity[thread] = vec4(proj[base + PROJ_CONIC_X], proj[base + PROJ_CONIC_Y],
+                                         proj[base + PROJ_CONIC_Z], proj[base + PROJ_OPACITY]);
+      batch_color[thread] = vec3(proj[base + PROJ_COLOR_R], proj[base + PROJ_COLOR_G],
+                                 proj[base + PROJ_COLOR_B]);
+    }
+    barrier();
+    if (!inside) continue;
+
+    uint available = min(256u, total - round * 256u);
+    for (uint j = 0u; j < available; ++j) {
+      --cursor;
+      // Everything past the pixel's last contributor was never composited.
+      if (cursor >= last_contributor) continue;
+
+      vec2 d = point - batch_mean[j];
+      vec4 conic_opacity = batch_conic_opacity[j];
+      float power = -0.5 * (conic_opacity.x * d.x * d.x + conic_opacity.z * d.y * d.y) -
+                    conic_opacity.y * d.x * d.y;
+      if (power > 0.0) continue;
+      float weight = exp(power);
+      float raw_alpha = conic_opacity.w * weight;
+      float alpha = min(float(MAX_ALPHA), raw_alpha);
+      if (alpha < MIN_ALPHA) continue;
+
+      running_transmittance /= 1.0 - alpha;
+      float contribution = alpha * running_transmittance;
+
+      uint splat = batch_index[j];
+      uint base = splat * SCREEN_STRIDE;
+      vec3 color = batch_color[j];
+
+      float dL_dalpha = 0.0;
+      for (int c = 0; c < 3; ++c) {
+        ATOMIC_ADD_FLOAT(screen_gradient, base + uint(SCREEN_DCOLOR_R + c),
+                         contribution * pixel_gradient[c]);
+        suffix[c] = last_alpha * last_color[c] + (1.0 - last_alpha) * suffix[c];
+        last_color[c] = color[c];
+        dL_dalpha += (color[c] - suffix[c]) * running_transmittance * pixel_gradient[c];
+      }
+      last_alpha = alpha;
+      dL_dalpha += -final_transmittance / (1.0 - alpha) * background_term;
+
+      // Above the cap the alpha is constant, so nothing flows further back.
+      if (raw_alpha >= float(MAX_ALPHA)) continue;
+
+      ATOMIC_ADD_FLOAT(screen_gradient, base + uint(SCREEN_DOPACITY), weight * dL_dalpha);
+      float dL_dweight = conic_opacity.w * dL_dalpha;
+      float gx = weight * d.x;
+      float gy = weight * d.y;
+      vec2 dmean = vec2(dL_dweight * (-gx * conic_opacity.x - gy * conic_opacity.y),
+                        dL_dweight * (-gy * conic_opacity.z - gx * conic_opacity.y));
+      // The pixel is fixed, so moving the mean is the opposite of moving delta.
+      ATOMIC_ADD_FLOAT(screen_gradient, base + uint(SCREEN_DMEAN_X), -dmean.x);
+      ATOMIC_ADD_FLOAT(screen_gradient, base + uint(SCREEN_DMEAN_Y), -dmean.y);
+      ATOMIC_ADD_FLOAT(screen_gradient, base + uint(SCREEN_DMEAN_ABS), length(dmean));
+      ATOMIC_ADD_FLOAT(screen_gradient, base + uint(SCREEN_DCONIC_X),
+                       -0.5 * dL_dweight * gx * d.x);
+      ATOMIC_ADD_FLOAT(screen_gradient, base + uint(SCREEN_DCONIC_Y), -dL_dweight * gx * d.y);
+      ATOMIC_ADD_FLOAT(screen_gradient, base + uint(SCREEN_DCONIC_Z),
+                       -0.5 * dL_dweight * gy * d.y);
+    }
+  }
+}

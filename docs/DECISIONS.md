@@ -234,24 +234,56 @@ from.
 
 ---
 
-## ADR-009 — Gaussian splat training on the GPU via Vulkan compute, with an explicit capability gate
+## ADR-009 — Gaussian splat training in Vulkan compute, with a CPU reference that is both the specification and the fallback
 
-**Status:** accepted
+**Status:** accepted (supersedes the original form of this decision, which gated splats on Vulkan
+and offered no fallback)
 
-**Context.** 3D Gaussian splatting needs tens of thousands of gradient-descent iterations over
-millions of Gaussians. That is a GPU workload.
+**Context.** 3D Gaussian splatting needs thousands of gradient-descent iterations over hundreds of
+thousands of gaussians. That is a GPU workload. But no part of it can be executed in this
+repository's CI: there is no GPU, no Vulkan loader and no driver, so a Vulkan-only implementation
+would ship having never run.
 
-**Decision.** Train in Vulkan compute shaders, gated on `supportsVulkanCompute` **and** at least
-6 GB of RAM (`DeviceCapabilities.canTrainSplats`). Devices that fail the gate get meshes and
-point clouds, and the settings screen states the reason rather than hiding the feature.
+**Decision.** Three things, in this order of authority.
 
-**Why a gate rather than a CPU fallback.** A CPU fallback exists in principle and is useless in
-practice: the arithmetic is thousands of times too slow to finish before the battery does.
-Offering it would be a worse experience than saying plainly that the device cannot do it.
+1. **The CPU implementation is the specification.** `SplatRaster.cpp` holds the EWA projection,
+   the tile-binned compositing, the analytic backward pass, SSIM and the loss; `SplatTrainer.cpp`
+   holds Adam and the schedule; `SplatDensify.cpp` holds adaptive density control. Every gradient
+   is checked against central differences, and the trainer is checked by holding a camera out of
+   the training set and requiring the error on that unseen view to halve. This is what defines
+   correct behaviour.
+2. **The Vulkan compute path is the shipping path.** Sixteen compute shaders under
+   `src/splat/vulkan/shaders/` implement the same equations: projection, a four-bit LSD radix sort
+   over packed (tile, depth) keys, two-level prefix sums, forward and backward rasterisation with
+   compare-and-swap float atomics, the SSIM chain, and Adam. They are compiled to SPIR-V by glslc
+   as part of the build — on the host as well as for Android — so a shader that stops compiling
+   breaks CI rather than a device.
+3. **A device that cannot run the GPU path still gets splats.** `trainSplatsOnGpu` returns false
+   rather than failing when Vulkan is missing, too old, out of memory or lost, and the pipeline
+   falls back to the CPU trainer with the schedule cut to a fifth of the iterations, a third of
+   the gaussians and one harmonic band. The settings screen says which path a device will take.
 
-**Consequence.** Splat training is the one part of the engine that cannot be exercised on the
-host, and that is recorded in `PROGRESS.md` under "verification boundaries" rather than papered
-over with a mock.
+**Why the fallback, when the original decision rejected one.** The original reasoning was that a
+CPU fallback is "thousands of times too slow to finish before the battery does". That was an
+estimate made before the reference existed. With a tile-binned rasteriser, 512-pixel training
+views and a schedule sized to the device, a reduced run is minutes rather than hours — slower and
+coarser than the GPU, but a result rather than a refusal. It also means that a defect in the
+untested GPU path degrades the experience instead of removing the feature.
+
+**The honest boundary.** The compute shaders are compile-verified and their arithmetic is a
+line-by-line transcription of code that is gradient-checked, but they have not been executed. They
+cannot be, here. `PROGRESS.md` records this under "verification boundaries" rather than counting
+the shaders as tested, and the fallback exists so that the first device to run them is not also
+the first device to be stuck without splats.
+
+**Consequences.**
+
+* Two implementations of the same mathematics have to be changed together. The shader headers name
+  their host counterpart in a comment at the top of each file for exactly that reason.
+* The GPU path caps the model at 262,144 gaussians, which is what keeps every prefix sum to two
+  levels. That is also roughly what a phone can hold.
+* The sort key packs fourteen bits of tile and eighteen of quantised depth into one 32-bit word,
+  halving the radix passes. It bounds a render to 16,383 tiles, which the host checks.
 
 ---
 
