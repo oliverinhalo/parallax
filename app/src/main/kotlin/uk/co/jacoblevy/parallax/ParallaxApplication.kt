@@ -1,6 +1,7 @@
 package uk.co.jacoblevy.parallax
 
 import android.app.Application
+import android.content.Context
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
@@ -8,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import uk.co.jacoblevy.parallax.core.common.di.ApplicationScope
 import uk.co.jacoblevy.parallax.core.data.repository.ProjectRepository
+import uk.co.jacoblevy.parallax.diagnostics.CrashReporter
 import uk.co.jacoblevy.parallax.feature.processing.ProcessingScheduler
 import javax.inject.Inject
 
@@ -43,6 +45,13 @@ class ParallaxApplication : Application(), Configuration.Provider {
             .setWorkerFactory(workerFactory)
             .setMinimumLoggingLevel(android.util.Log.INFO)
             .build()
+
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        // Before anything else, including Hilt building the graph: a failure in there is the
+        // one a user cannot report any other way, because the app never reaches a screen.
+        CrashReporter.install(this)
+    }
 
     override fun onCreate() {
         super.onCreate()

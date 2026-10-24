@@ -81,6 +81,20 @@
         </activity>
 
         <!--
+          The crash screen runs in its own process. A crash while the application's own graph
+          is being built leaves the main process unable to start, so a screen hosted there
+          would never appear, and that is the crash a user is least able to report any other
+          way. The platform theme for the same reason: it must not depend on app resources.
+        -->
+        <activity
+            android:name=".diagnostics.CrashActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:process=":crash"
+            android:taskAffinity=".crash"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <!--
           WorkManager is initialised on demand, because the application class
           supplies Hilt's worker factory through Configuration.Provider. Leaving
           the default initializer in place would construct the reconstruction

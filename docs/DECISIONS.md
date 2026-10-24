@@ -428,3 +428,35 @@ losing it has the same consequence permanently.
 
 **Why not commit an encrypted keystore.** The passphrase would have to live somewhere too, and a
 repository that contains both is a repository that contains the key.
+
+---
+
+## ADR-016 — An offline crash screen in its own process
+
+**Status:** accepted
+
+**Context.** Parallax makes no network requests, so there is no crash reporting service and
+never will be. A user whose app dies on launch has nothing to send and no way to look: the
+trace exists only in logcat, which needs a computer and developer options.
+
+**Decision.** A default uncaught-exception handler, installed first in `attachBaseContext`,
+writes a report to the app's own storage and shows it on a plain-view `Activity` running in a
+`:crash` process, with a Share button. The handler then delegates to the platform's handler,
+which ends the process as the system expects.
+
+**Why a second process.** The crash this is most needed for is the one during application
+startup, where the main process cannot reach a screen at all. A reporter hosted there would be
+dead before it could draw.
+
+**Why platform views and hard-coded colours.** It has to render when the app's own theme,
+resources or dependency graph are what failed, so it depends on none of them.
+
+**What it costs.** A second process entry in the manifest, and a screen that is deliberately
+uglier than the rest of the app. The handler also sees exceptions it has no business showing a
+screen for — a crash on a worker thread during a background reconstruction now puts a crash
+screen in front of a user who was doing something else. That is the right trade for a scanner
+whose failures are otherwise invisible, but it is a trade.
+
+**Why not a debug-only build flavour.** The crash that matters is the one on a user's device,
+on their phone's OS version, with their data. A reporter that only exists in builds made by
+people who already have logcat reports nothing.

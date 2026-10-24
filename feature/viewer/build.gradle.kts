@@ -1,4 +1,9 @@
-plugins { id("parallax.android.feature") }
+plugins {
+    id("parallax.android.feature")
+    // The native preview builder answers in JSON, so this module needs the serialization
+    // compiler plugin or opening a model throws SerializationException at the point of use.
+    alias(libs.plugins.kotlin.serialization)
+}
 
 dependencies {
     implementation(projects.core.data)

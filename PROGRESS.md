@@ -500,3 +500,39 @@ and the device-only layers are kept as thin as possible, so that the logic that
 *can* be tested is tested. Where an algorithm is device-only, the code path is
 written to be reviewable and its assumptions documented in
 `docs/DECISIONS.md` — but it has not been run.
+
+---
+
+## Phase 13 — The app would not start
+
+The first install on a real device (Galaxy S26 Ultra, One UI 9) died instantly on launch. No
+test caught it, because `:app` had no unit tests at all: every module below it was covered, and
+nothing had ever built the whole graph and composed the navigation host on top of it.
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| The app closed immediately on launch, on every device | `:app` never applied the kotlinx-serialization *compiler plugin*. Type-safe navigation looks up a generated serialiser for each destination, so the first composition threw `SerializationException: Serializer for class 'Onboarding' is not found` before a frame was drawn. The module compiled cleanly: the plugin is separate from the dependency, which is the trap already written down in `CLAUDE.md` and still walked into. |
+| Opening a finished model would have thrown the same way | `:feature:viewer` was missing the same plugin. Its `@Serializable` type parses the native preview builder's answer, which is behind a JNI call that cannot run in CI, so nothing had ever resolved that serialiser. |
+| The crash reporter killed the Gradle test worker | Its handler called `exitProcess` after delegating. On a device the platform's handler already ends the process; under Robolectric there is no platform handler and an uncaught exception is a test result, not a death. It now delegates and does not exit. |
+
+The first of those is the whole reason the phase exists. The second was found by looking for
+the same mistake elsewhere rather than by the crash, which is the more useful half.
+
+### What is new
+
+- `:app` has unit tests: the dependency graph builds, WorkManager's configuration is supplied,
+  nothing in our own code throws on the way to the first frame, and every navigation route
+  resolves a serialiser. The last of those fails if the plugin is removed and names the route.
+- An offline crash screen (ADR-016): a handler installed before Hilt builds anything, writing
+  a report and showing it in a separate process with a Share button. No network, as everywhere
+  else.
+
+### Verification boundaries
+
+The startup test runs under Robolectric, which cannot emulate Play's install service: ARCore's
+availability check binds it and gets a null binder back, so the first-frame test ignores frames
+outside our own packages. A failure inside ARCore itself on a real device would not be caught
+here.
+

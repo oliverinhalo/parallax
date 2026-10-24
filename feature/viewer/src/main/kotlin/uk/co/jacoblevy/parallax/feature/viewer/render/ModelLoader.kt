@@ -108,7 +108,7 @@ class ModelLoader @Inject constructor(
 }
 
 @Serializable
-private data class PreviewResult(
+internal data class PreviewResult(
     val success: Boolean = false,
     val message: String = "",
     val vertexCount: Long = 0,

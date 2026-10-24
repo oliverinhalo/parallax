@@ -4,6 +4,11 @@ plugins {
     id("parallax.android.application")
     id("parallax.android.compose")
     id("parallax.android.hilt")
+    // The navigation routes are type-safe, which means Navigation looks up a generated
+    // serialiser for every destination class. Without the compiler plugin those serialisers
+    // do not exist: the module compiles, and the first composition throws
+    // SerializationException before a single frame is drawn.
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -67,6 +72,9 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
+
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
 
     androidTestImplementation(projects.core.testing)
     androidTestImplementation(libs.androidx.test.runner)
