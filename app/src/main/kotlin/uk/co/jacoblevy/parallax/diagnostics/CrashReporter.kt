@@ -38,7 +38,7 @@ object CrashReporter {
                 .getOrElse { "Parallax crash report\n\n${throwable.stackTraceToString()}" }
 
             Log.e(TAG, report)
-            runCatching { write(application, report) }
+            runCatching { store(application, report) }
             runCatching { show(application, report) }
 
             // Delegating is what ends the process: on Android the handler installed before
@@ -63,6 +63,11 @@ object CrashReporter {
      */
     fun showStoredReport(context: Context): Boolean {
         val report = lastReport(context) ?: return false
+        // Cleared before it is shown, not after. If showing it fails -- the screen never
+        // starts, or dies rendering -- a report cleared afterwards would still be there on the
+        // next launch, and the app would stop at this line every time it was opened, with
+        // nothing to show for it and no way out but reinstalling.
+        clear(context)
         return runCatching { show(context, report) }.isSuccess
     }
 
@@ -97,7 +102,8 @@ object CrashReporter {
         )
     }
 
-    private fun write(context: Context, report: String) {
+    /** Stores a report as the handler would. Visible so the recovery path can be tested. */
+    internal fun store(context: Context, report: String) {
         file(context).writeText(report)
     }
 

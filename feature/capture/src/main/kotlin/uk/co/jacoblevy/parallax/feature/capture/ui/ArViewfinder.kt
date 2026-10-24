@@ -7,14 +7,15 @@ import android.view.Display
 import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import uk.co.jacoblevy.parallax.core.model.CaptureMode
 import uk.co.jacoblevy.parallax.feature.capture.session.ArCaptureSession
 import uk.co.jacoblevy.parallax.feature.capture.session.ArFrame
 import uk.co.jacoblevy.parallax.feature.capture.session.ArSessionFailure
@@ -35,7 +36,6 @@ import javax.microedition.khronos.opengles.GL10
  */
 @Composable
 internal fun ArViewfinder(
-    mode: CaptureMode,
     preferDepth: Boolean,
     recording: Boolean,
     engineProvider: () -> CaptureEngine?,
@@ -45,16 +45,29 @@ internal fun ArViewfinder(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val renderer = remember(mode) {
+
+    // The callbacks are read from the GL thread for the life of the session, so they are held
+    // by a state that recomposition updates rather than captured once: a renderer built on the
+    // first composition would otherwise go on calling the first `onTick` forever.
+    val currentEngineProvider by rememberUpdatedState(engineProvider)
+    val currentOnTick by rememberUpdatedState(onTick)
+    val currentOnFailure by rememberUpdatedState(onFailure)
+
+    // Remembered with no key. ARCore permits one session per process, so a renderer rebuilt on
+    // any input -- `preferDepth` flipping when the capability check comes back, or the
+    // mode, which it never needed -- would construct a second session beside the live one and
+    // take the process down in native code, with no exception for anything to catch. What can
+    // change is pushed in below instead.
+    val renderer = remember {
         ArViewfinderRenderer(
             context = context,
-            preferDepth = preferDepth,
-            engineProvider = engineProvider,
-            onTick = onTick,
-            onFailure = onFailure,
+            engineProvider = { currentEngineProvider() },
+            onTick = { currentOnTick(it) },
+            onFailure = { currentOnFailure(it) },
         )
     }
     renderer.recording = recording
+    renderer.preferDepth = preferDepth
 
     val view = remember(renderer) {
         GLSurfaceView(context).apply {
@@ -116,7 +129,6 @@ private const val GL_VERSION = 2
  */
 private class ArViewfinderRenderer(
     private val context: Context,
-    private val preferDepth: Boolean,
     private val engineProvider: () -> CaptureEngine?,
     private val onTick: (CaptureTick) -> Unit,
     private val onFailure: (ArSessionFailure) -> Unit,
@@ -127,6 +139,14 @@ private class ArViewfinderRenderer(
 
     @Volatile
     var recording: Boolean = false
+
+    /**
+     * Whether to ask ARCore for depth. Set from the main thread and read on the GL thread when
+     * the session is configured, so a capability check that finishes after the viewfinder is
+     * already up still takes effect without rebuilding anything.
+     */
+    @Volatile
+    var preferDepth: Boolean = false
 
     @Volatile
     private var resumeRequested = false

@@ -32,12 +32,13 @@ class MainActivity : ComponentActivity() {
 
         // Showing the crash screen from the handler is a race: the request reaches the system
         // while the process it came from is being torn down, and the screen can be lost. The
-        // report on disk is not, so an unread one is shown on the next launch instead -- which
-        // is also the only route for a crash the handler could not show anything for at all.
-        if (CrashReporter.showStoredReport(this)) {
-            finish()
-            return
-        }
+        // report on disk is not, so an unread one is shown on the next launch too -- which is
+        // also the only route for a crash the handler could not show anything for at all.
+        //
+        // The app carries on behind it rather than finishing. The crash screen is in its own
+        // task, so it covers this one; finishing here would mean that a screen that failed to
+        // appear left the user with an app that closed itself the moment it was opened.
+        CrashReporter.showStoredReport(this)
 
         // Hold the splash until the stored theme and onboarding flag are known: drawing with
         // defaults and correcting afterwards flashes the wrong theme on every cold start. The

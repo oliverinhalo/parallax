@@ -118,7 +118,6 @@ internal fun CaptureScreen(
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (!state.blockedByArCore && state.mode.requiresArCore) {
             ArViewfinder(
-                mode = state.mode,
                 preferDepth = state.capabilities.supportsDepthApi,
                 recording = state.isRecording,
                 engineProvider = engineProvider,

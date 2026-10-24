@@ -75,10 +75,24 @@ class AppStartupTest {
     }
 
     @Test
-    fun `a stored crash report is shown on the next launch instead of the app`() {
+    fun `with no stored crash report there is nothing to show`() {
         val application = ApplicationProvider.getApplicationContext<Application>()
         CrashReporter.clear(application)
+
         assertThat(CrashReporter.showStoredReport(application)).isFalse()
+    }
+
+    @Test
+    fun `a stored report is consumed by the attempt to show it, not by being seen`() {
+        // Otherwise a screen that fails to appear leaves the report in place, and every
+        // launch afterwards stops to show a crash screen that never arrives -- which is
+        // an app that cannot be opened again until it is reinstalled.
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        CrashReporter.store(application, "Parallax crash report\n\nboom")
+
+        CrashReporter.showStoredReport(application)
+
+        assertThat(CrashReporter.lastReport(application)).isNull()
     }
 
     private fun ourFramesIn(failure: Throwable?): List<String> =

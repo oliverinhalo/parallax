@@ -536,3 +536,27 @@ availability check binds it and gets a null binder back, so the first-frame test
 outside our own packages. A failure inside ARCore itself on a real device would not be caught
 here.
 
+---
+
+## Phase 14 — Switching capture mode took the process down
+
+Reported from a device: Object mode worked, switching to any other mode closed the app, and it
+would not start again until it was reinstalled. Two separate bugs, one of them mine from the
+phase before.
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| Switching capture mode closed the app with no dialog and no crash report | `ArViewfinder` remembered its renderer keyed on the capture mode, and each renderer owns an `ArCaptureSession`. ARCore permits one session per process, so a mode switch built a second one beside the live one and the process died in native code -- where no Kotlin handler can see it. The renderer never used the mode at all. It also rebuilt when `preferDepth` flipped as the capability check came back, which is the same crash on a slower path. |
+| Once it had happened, the app would not open again until it was reinstalled | The crash report was cleared after the crash screen was shown. When the screen did not appear, the report stayed, so every launch stopped to show a screen that never arrived and then finished the activity. Reinstalling was the only way to clear the file. The report is now consumed by the attempt, and the app carries on behind the screen rather than finishing. |
+| The renderer would have gone on calling the first composition's callbacks | Fixing the key exposed it: a renderer built once captures the lambdas it was built with, and `onTick` is handed a new one on every recomposition. They are read through `rememberUpdatedState` now. |
+
+### Verification boundaries
+
+That two ARCore sessions kill the process cannot be reproduced here: it is native, and there is
+no ARCore in CI. What the tests do cover is that the capture screen composes in every mode and
+recomposes between them, and that a stored crash report is consumed by the attempt to show it.
+The single-session rule itself is held by one `remember` with no key and a comment saying why --
+which is weaker than a test, and worth knowing.
+
