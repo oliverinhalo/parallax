@@ -39,6 +39,18 @@ style:
     ignoreNamedArgument: true
     ignoreEnums: true
     ignoreAnnotated: ['Composable', 'Preview']
+    # The viewer's geometry: vector component indices and the small factors of
+    # linear algebra. `positions[index * 3 + 2]` says what it means; the same
+    # line written with Z_COMPONENT and FLOATS_PER_VERTEX says it less well.
+    # Listing `excludes` replaces detekt's default, which exempts test
+    # sources, so those globs have to be repeated here rather than inherited.
+    excludes:
+      - '**/test/**'
+      - '**/androidTest/**'
+      - '**/feature/viewer/camera/**'
+      - '**/feature/viewer/edit/**'
+      - '**/feature/viewer/pick/**'
+      - '**/feature/viewer/measure/**'
   MaxLineLength:
     maxLineLength: 120
   ReturnCount:

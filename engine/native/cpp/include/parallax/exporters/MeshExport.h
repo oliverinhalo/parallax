@@ -37,6 +37,21 @@ struct ExportOptions {
   bool include_vertex_colors = true;
   bool include_normals = true;
   bool include_uvs = true;
+  /**
+   * Mark the glTF material unlit (KHR_materials_unlit).
+   *
+   * For the viewer's point-cloud and splat previews, where the colour in the
+   * file already is the final colour: relighting a scanned surface a second
+   * time makes it look like plastic.
+   */
+  bool unlit = false;
+  /**
+   * Alpha-blend the glTF material rather than writing it opaque.
+   *
+   * The splat preview needs it, because its soft edge lives in the texture's
+   * alpha; nothing else does, and a blended opaque mesh only costs sorting.
+   */
+  bool blend = false;
   /// Name embedded in the file (glTF node/mesh name, OBJ group, USD prim).
   std::string name = "ParallaxModel";
   std::string generator = "Parallax 1.0";

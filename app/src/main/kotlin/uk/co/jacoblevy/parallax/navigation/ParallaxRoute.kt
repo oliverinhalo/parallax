@@ -22,6 +22,16 @@ sealed interface ParallaxRoute {
     @Serializable
     data object Processing : ParallaxRoute
 
+    /** A finished scan, open in the viewer. */
+    @Serializable
+    data class Viewer(val projectId: String) : ParallaxRoute
+
+    @Serializable
+    data class Export(val projectId: String) : ParallaxRoute
+
+    @Serializable
+    data class ArPlacement(val projectId: String) : ParallaxRoute
+
     @Serializable
     data object Settings : ParallaxRoute
 

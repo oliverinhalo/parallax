@@ -19,6 +19,7 @@ import uk.co.jacoblevy.parallax.feature.processing.ProcessingRoute
 import uk.co.jacoblevy.parallax.feature.onboarding.OnboardingRoute
 import uk.co.jacoblevy.parallax.feature.settings.LicencesRoute
 import uk.co.jacoblevy.parallax.feature.settings.SettingsRoute
+import uk.co.jacoblevy.parallax.feature.viewer.ui.ViewerRoute
 
 /**
  * The app's navigation graph.
@@ -65,7 +66,8 @@ fun ParallaxNavHost(
             LaunchedEffect(launcher) {
                 launcher.destinations.collect { destination ->
                     when (destination) {
-                        is ProjectDestination.Viewer -> Unit // wired when the viewer lands
+                        is ProjectDestination.Viewer ->
+                            navController.navigate(ParallaxRoute.Viewer(destination.projectId))
                         ProjectDestination.Processing ->
                             navController.navigate(ParallaxRoute.Processing)
                         is ProjectDestination.ResumeCapture ->
@@ -102,7 +104,15 @@ fun ParallaxNavHost(
         composable<ParallaxRoute.Processing> {
             ProcessingRoute(
                 onBack = navController::popBackStack,
-                onOpenProject = { /* wired when the viewer lands */ },
+                onOpenProject = { navController.navigate(ParallaxRoute.Viewer(it)) },
+            )
+        }
+
+        composable<ParallaxRoute.Viewer> {
+            ViewerRoute(
+                onBack = navController::popBackStack,
+                onExport = { navController.navigate(ParallaxRoute.Export(it)) },
+                onPlaceInRoom = { navController.navigate(ParallaxRoute.ArPlacement(it)) },
             )
         }
 

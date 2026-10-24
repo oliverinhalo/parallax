@@ -311,6 +311,57 @@ exporter's comment and in `PROGRESS.md` rather than being presented as verified 
 
 ---
 
+## ADR-013 — Points and splats are drawn as triangle geometry, built natively
+
+**Status:** accepted
+
+**Context.** A point cloud and a Gaussian splat field both want their own shader: points as
+screen-facing sprites, gaussians as projected ellipses with an analytic falloff. In Filament a
+custom material has to be compiled by `matc` at build time, which means another tool in the chain
+and a shader whose output could not be checked anywhere in this repository.
+
+**Decision.** The viewer has exactly one way to draw something: load a GLB. Point clouds become
+one small disc per point facing that point's normal; splats become two triangles per gaussian
+spanning its two widest axes, textured with a baked radial alpha ramp. Both are built by
+`buildPointCloudPreview` and `buildSplatPreview` in the native engine, written out through the
+same tested GLB writer the exporters use, and cached beside the project's outputs.
+
+**Why.** It moves the whole of the interesting work — disc sizing from local point spacing,
+choosing which of a gaussian's axes to keep, the falloff ramp — into code that has unit tests,
+and leaves the renderer with nothing to get wrong. It also means the cached preview is an
+ordinary glTF file that any other viewer can open, which made the round-trip test possible.
+
+**The trade-off, stated plainly.** Splats drawn this way are a good likeness rather than a correct
+rasterisation. The quad is a planar slice of the gaussian rather than its projected covariance, so
+a very elongated splat looks slightly wrong edge-on; and the blend order is fixed when the file is
+written (by descending opacity) rather than sorted per frame, so a dense field seen from an
+unlucky angle can show ordering artefacts. For inspecting a scan this is the right trade; for
+publishing one, the exported `.ply`, `.splat` and `.spz` carry the real gaussians.
+
+---
+
+## ADR-014 — Lighting presets from directional lights, not an environment map
+
+**Status:** accepted
+
+**Context.** Physically based rendering looks best with an image-based light, and Filament's
+`cmgen` turns an HDR panorama into the cubemaps it needs. The brief asks for lighting presets.
+
+**Decision.** The four presets are built from two or three directional lights each, with
+different intensities and colour temperatures, plus a plain dark skybox.
+
+**Why.** An IBL would need `cmgen` in the build and several megabytes of cubemap in the APK, in
+an app whose whole premise is that it needs no downloads and works in airplane mode. Three
+directional lights give four presets that genuinely look different from each other, which is what
+the setting is for.
+
+**Consequence.** "Environment" is a warm overhead light against a cool bounce from below rather
+than a real sky, and reflections on a scanned surface are approximate. Scanned surfaces are
+diffuse and have little to reflect, so this is less of a loss than it would be for a product
+render.
+
+---
+
 ## ADR-011 — Coarse-grained JNI with opaque handles
 
 **Status:** accepted

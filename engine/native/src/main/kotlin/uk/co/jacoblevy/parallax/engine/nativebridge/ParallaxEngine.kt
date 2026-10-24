@@ -198,6 +198,24 @@ object ParallaxEngine {
         return nativeConvertSplats(inputPath, outputPath, format)
     }
 
+    /**
+     * Build the viewer's preview geometry.
+     *
+     * [kind] is "points" or "splat"; [inputPath] is the matching `cloud.ply`
+     * or `splat.ply`. Both come back as a GLB, because the viewer has exactly
+     * one loader -- see docs/DECISIONS.md (ADR-013).
+     */
+    fun buildPreview(
+        inputPath: String,
+        outputPath: String,
+        kind: String,
+        maxPrimitives: Int = 0,
+    ): String {
+        ensureLoaded()
+        loadFailure?.let { throw UnavailableException(it) }
+        return nativeBuildPreview(inputPath, outputPath, kind, maxPrimitives)
+    }
+
     // ------------------------------------------------------------- natives
     //
     // Signatures here are matched by name in jni/ParallaxJni.cpp. The ProGuard rules in
@@ -243,6 +261,12 @@ object ParallaxEngine {
     @JvmStatic private external fun nativeLoadMeshIndices(handle: Long): IntArray?
     @JvmStatic private external fun nativeLoadPointCloud(handle: Long): FloatArray?
     @JvmStatic private external fun nativeLoadFloorPlan(handle: Long): String
+    @JvmStatic private external fun nativeBuildPreview(
+        inputPath: String,
+        outputPath: String,
+        kind: String,
+        maxPrimitives: Int,
+    ): String
     @JvmStatic private external fun nativeRenderFloorPlanSvg(
         handle: Long,
         dark: Boolean,

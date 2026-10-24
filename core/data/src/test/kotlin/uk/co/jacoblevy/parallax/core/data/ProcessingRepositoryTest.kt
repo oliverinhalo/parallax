@@ -59,6 +59,7 @@ class ProcessingRepositoryTest {
                     captureJson = "{}",
                     outputs = "",
                     measurementsJson = null,
+                    editsJson = null,
                     storageBytes = 0,
                     favourite = false,
                     notes = "",

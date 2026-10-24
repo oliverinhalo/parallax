@@ -347,10 +347,46 @@ decision, and for what is and is not verified about the shaders.
 
 ---
 
+## Phase 10 — Viewer ✅
+
+**The device layer is one file.** `ModelSurface` owns every Filament call --
+engine, swap chain, camera, lights, asset loading -- and nothing else in the
+module knows Filament exists. Everything above it works in terms of a camera
+position and a GLB on disk, which is what makes the rest of the viewer
+testable: the camera feel, the picking, the measurement arithmetic, the edit
+algebra and the whole interaction state machine run on a JVM.
+
+**The camera is pure state and pure transitions.** Orbit with clamped pitch,
+distance-scaled panning and frame-rate-independent inertia; walk mode confined
+to the scan's own bounds with an adjustable eye height. Both are data classes
+with no dependencies, and both are tested against what they are for -- that
+framing a box puts every corner inside the frustum, that a flick decays to
+rest, that a long frame does not overshoot into a reversal.
+
+**Picking, measuring and editing.** A uniform grid over the triangles turns a
+tap into a point on the surface; measurements are distance, height and area,
+with area by Newell's method because the points a finger taps on a scanned
+floor are never quite coplanar. Edits are stored as intent -- crop to this box,
+rescale so that this measurement is really 2.4 m -- and folded into one
+transform and one keep test, so the scan is never rewritten and any edit can be
+undone months later.
+
+**Points and splats go through the same loader as the mesh**, by being converted
+to triangle geometry in the native engine and written out as GLB. That is
+ADR-013, and it is what let the hardest part of the rendering be unit-tested.
+
+### Bugs this phase's tests caught
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| The levelling rotation turned the floor the wrong way | Re-levelling a tilted scan tipped it further over instead of flat | Rodrigues' formula about `Y x n` rather than `n x Y`. The angle was right, so the model rotated by exactly the correct amount in exactly the wrong direction |
+| A lasso cut kept what was behind the camera | Geometry the user could not see was being deleted along with what they selected | The test's own projection matrix had no perspective in it, which is what exposed that the behind-the-camera rejection needed `w` to carry depth |
+| The brightness slider was unbounded | Nothing yet, but a saved value of 40 stops would have rendered pure white | The clamp was written into the UI rather than the state |
+
+---
+
 ## Remaining phases
 
-- [ ] **Phase 10 — Viewer**: Filament, render modes, measurement, editing,
-      annotations, walk mode
 - [ ] **Phase 11 — Export UI, AR placement, offline HTML viewer**
 - [ ] **Phase 12 — Polish & hardening**: accessibility pass, screenshot tests,
       macrobenchmarks, CI, remaining docs
@@ -361,8 +397,8 @@ decision, and for what is and is not verified about the shaders.
 
 Stated plainly so nothing here is mistaken for more than it is.
 
-**Verified by tests that run in this repo:** 313 native gtest assertions and
-285 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
+**Verified by tests that run in this repo:** 325 native gtest assertions and
+358 JVM/Robolectric tests, plus the Gradle build, detekt, Android Lint, R8
 release minification and APK packaging.
 
 The capture *logic* is covered — coverage accumulation, guidance priority and
@@ -380,7 +416,10 @@ GPU, no ARCore service):
   breaks CI; but no shader here has ever been executed. Their arithmetic is a
   transcription of code that is gradient-checked, and a device that cannot run
   them falls back to that code rather than losing the feature
-- Filament rendering output
+- Filament rendering output. `ModelSurface` is the one file that cannot be
+  tested here, which is why it is the only file in the viewer that touches
+  Filament and why a renderer that refuses to start is a state the screen
+  handles rather than a crash
 - LiteRT model inference with GPU/NNAPI delegates
 - Real-device frame rates, thermal throttling and memory behaviour
 

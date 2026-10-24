@@ -50,6 +50,7 @@ data class ProjectEntity(
     @ColumnInfo(name = "capture_json") val captureJson: String,
     @ColumnInfo(name = "outputs") val outputs: String,
     @ColumnInfo(name = "measurements_json") val measurementsJson: String?,
+    @ColumnInfo(name = "edits_json") val editsJson: String?,
     @ColumnInfo(name = "storage_bytes") val storageBytes: Long,
     val favourite: Boolean,
     val notes: String,

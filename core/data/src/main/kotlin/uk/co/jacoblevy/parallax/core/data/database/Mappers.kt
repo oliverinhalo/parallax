@@ -6,6 +6,7 @@ import uk.co.jacoblevy.parallax.core.model.CaptureMode
 import uk.co.jacoblevy.parallax.core.model.CaptureSummary
 import uk.co.jacoblevy.parallax.core.model.Folder
 import uk.co.jacoblevy.parallax.core.model.Measurement
+import uk.co.jacoblevy.parallax.core.model.ModelEdit
 import uk.co.jacoblevy.parallax.core.model.ModelMeasurements
 import uk.co.jacoblevy.parallax.core.model.OutputKind
 import uk.co.jacoblevy.parallax.core.model.Point3
@@ -74,6 +75,11 @@ fun ProjectEntity.toDomain(): Project = Project(
     storageBytes = storageBytes,
     favourite = favourite,
     notes = notes,
+    // An edit list that no longer parses is dropped rather than failing the
+    // whole project: losing a crop is recoverable, losing the scan is not.
+    edits = editsJson?.let {
+        runCatching { projectJson.decodeFromString<List<ModelEdit>>(it) }.getOrNull()
+    }.orEmpty(),
 )
 
 fun Project.toEntity(): ProjectEntity = ProjectEntity(
@@ -89,6 +95,7 @@ fun Project.toEntity(): ProjectEntity = ProjectEntity(
     captureJson = projectJson.encodeToString(capture),
     outputs = encodeOutputs(outputs),
     measurementsJson = measurements?.let { projectJson.encodeToString(it) },
+    editsJson = edits.takeIf { it.isNotEmpty() }?.let { projectJson.encodeToString(it) },
     storageBytes = storageBytes,
     favourite = favourite,
     notes = notes,

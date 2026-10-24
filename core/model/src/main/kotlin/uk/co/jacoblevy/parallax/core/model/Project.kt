@@ -20,6 +20,14 @@ data class Project(
     /** Set when the project is starred, which pins it to the top of the library. */
     val favourite: Boolean = false,
     val notes: String = "",
+    /**
+     * Non-destructive edits, in the order they were made.
+     *
+     * The scan itself is never rewritten. Keeping the edits as a list of
+     * intents means a crop can be undone months later, an export can choose
+     * whether to apply them, and a reprocessed scan inherits them.
+     */
+    val edits: List<ModelEdit> = emptyList(),
 ) {
     val isProcessed: Boolean get() = status is ProjectStatus.Ready
     val canProcess: Boolean

@@ -270,6 +270,23 @@ Json GltfBuilder::build(const std::string& buffer_uri) {
     pbr.set("baseColorTexture", std::move(base_color_texture));
   }
   material.set("pbrMetallicRoughness", std::move(pbr));
+  if (options_.blend) {
+    // The splat preview's soft edge is alpha in its texture, so the material
+    // has to blend; BLEND rather than MASK because a hard cut-off would turn
+    // every gaussian back into a square.
+    material.set("alphaMode", Json::string("BLEND"));
+  }
+  if (options_.unlit) {
+    // KHR_materials_unlit, declared on the material and in extensionsUsed.
+    // The colour in a scan's vertices already includes its lighting; relighting
+    // it makes the surface look like plastic.
+    Json extensions = Json::object();
+    extensions.set("KHR_materials_unlit", Json::object());
+    material.set("extensions", std::move(extensions));
+    Json used = Json::array();
+    used.push(Json::string("KHR_materials_unlit"));
+    root.set("extensionsUsed", std::move(used));
+  }
   Json materials = Json::array();
   materials.push(std::move(material));
   root.set("materials", std::move(materials));

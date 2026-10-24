@@ -21,6 +21,7 @@
 #include "parallax/io/Json.h"
 #include "parallax/io/MeshReader.h"
 #include "parallax/pipeline/Pipeline.h"
+#include "parallax/splat/SplatPreview.h"
 #include "parallax/splat/GaussianCloud.h"
 
 #ifdef __ANDROID__
@@ -743,6 +744,73 @@ Java_uk_co_jacoblevy_parallax_engine_nativebridge_ParallaxEngine_nativeConvertSp
   json.set("success", Json::boolean(ok));
   json.set("count", Json::integer(static_cast<int64_t>(cloud.size())));
   json.set("message", Json::string(ok ? "converted" : "write failed"));
+  return toJavaString(env, json.dump());
+}
+
+/**
+ * Builds the viewer's preview geometry for a point cloud or a splat field.
+ *
+ * The viewer loads GLB and nothing else, so both are converted to ordinary
+ * triangles with vertex colours here rather than needing their own shader on
+ * the Kotlin side. See docs/DECISIONS.md (ADR-013).
+ */
+JNIEXPORT jstring JNICALL
+Java_uk_co_jacoblevy_parallax_engine_nativebridge_ParallaxEngine_nativeBuildPreview(
+    JNIEnv* env, jclass, jstring input_path, jstring output_path, jstring kind_string,
+    jint max_primitives) {
+  Json json = Json::object();
+  const std::string input = toStdString(env, input_path);
+  const std::string output = toStdString(env, output_path);
+  const std::string kind = toStdString(env, kind_string);
+
+  Mesh mesh;
+  ColorBuffer texture;
+  std::string error;
+  if (kind == "points") {
+    std::vector<Vec3f> points, normals;
+    std::vector<std::array<uint8_t, 3>> colors;
+    if (!readPlyPointCloud(input, &points, &normals, &colors, &error)) {
+      json.set("success", Json::boolean(false));
+      json.set("message", Json::string(error.empty() ? "could not read the point cloud" : error));
+      return toJavaString(env, json.dump());
+    }
+    PointPreviewOptions options;
+    if (max_primitives > 0) options.max_points = max_primitives;
+    mesh = buildPointCloudPreview(points, normals, colors, options);
+  } else if (kind == "splat") {
+    GaussianCloud cloud;
+    if (!readGaussianPly(input, &cloud, &error)) {
+      json.set("success", Json::boolean(false));
+      json.set("message", Json::string(error.empty() ? "could not read the splat field" : error));
+      return toJavaString(env, json.dump());
+    }
+    SplatPreviewOptions options;
+    if (max_primitives > 0) options.max_gaussians = max_primitives;
+    mesh = buildSplatPreview(cloud, options);
+    texture = splatFalloffTexture();
+  } else {
+    json.set("success", Json::boolean(false));
+    json.set("message", Json::string("unsupported preview kind: " + kind));
+    return toJavaString(env, json.dump());
+  }
+
+  if (mesh.empty()) {
+    json.set("success", Json::boolean(false));
+    json.set("message", Json::string("there was nothing visible to draw"));
+    return toJavaString(env, json.dump());
+  }
+
+  ExportOptions options;
+  options.name = kind == "splat" ? "ParallaxSplatPreview" : "ParallaxPointPreview";
+  // Unlit and blended: a point cloud and a splat field both carry their own
+  // colour and must not be relit, and the splat's falloff needs alpha.
+  options.unlit = true;
+  options.blend = kind == "splat";
+  const bool ok = writeGlb(output, mesh, texture, options);
+  json.set("success", Json::boolean(ok));
+  json.set("vertexCount", Json::integer(static_cast<int64_t>(mesh.vertexCount())));
+  json.set("triangleCount", Json::integer(static_cast<int64_t>(mesh.triangleCount())));
+  json.set("message", Json::string(ok ? "built" : "could not write the preview"));
   return toJavaString(env, json.dump());
 }
 
