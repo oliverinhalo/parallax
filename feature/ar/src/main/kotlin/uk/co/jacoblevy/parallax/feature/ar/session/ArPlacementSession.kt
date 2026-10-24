@@ -11,6 +11,7 @@ import com.google.ar.core.Trackable
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.UnavailableException
+import uk.co.jacoblevy.parallax.core.ar.ArSessionSlot
 
 /** Why AR placement could not start, phrased for a person. */
 data class ArPlacementFailure(val message: String)
@@ -44,6 +45,12 @@ class ArPlacementSession(private val context: Context) {
     fun start(): Boolean {
         if (session != null) return true
         failure = null
+        // ARCore permits one session per process and enforces it in native code, so a capture
+        // session that has not finished closing has to be reported rather than walked into.
+        if (!ArSessionSlot.acquire(this)) {
+            failure = ArPlacementFailure("The camera is still busy. Go back and try again.")
+            return false
+        }
         return try {
             val created = Session(context)
             created.configure(
@@ -61,11 +68,20 @@ class ArPlacementSession(private val context: Context) {
             true
         } catch (e: UnavailableException) {
             Log.w(TAG, "ARCore refused to start a placement session", e)
+            ArSessionSlot.release(this)
             failure = ArPlacementFailure(e.message ?: "AR is not available on this device.")
             false
         } catch (e: SecurityException) {
             Log.w(TAG, "no camera permission for AR placement", e)
+            ArSessionSlot.release(this)
             failure = ArPlacementFailure("Camera permission is needed to place a scan in a room.")
+            false
+        } catch (e: RuntimeException) {
+            // Undocumented, device-specific, and on the GL thread -- where anything thrown
+            // ends the process rather than reaching a catch higher up.
+            Log.w(TAG, "starting the placement session failed", e)
+            ArSessionSlot.release(this)
+            failure = ArPlacementFailure("AR could not start on this device.")
             false
         }
     }
@@ -99,6 +115,9 @@ class ArPlacementSession(private val context: Context) {
         runCatching { session?.close() }
         session = null
         textureSet = false
+        // Released even when closing threw: a slot held by a session nobody can reach is a
+        // camera that never opens again for the rest of the process's life.
+        ArSessionSlot.release(this)
     }
 
     fun setDisplayGeometry(rotation: Int, width: Int, height: Int) {

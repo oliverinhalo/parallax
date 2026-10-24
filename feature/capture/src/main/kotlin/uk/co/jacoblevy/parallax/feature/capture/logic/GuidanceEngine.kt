@@ -4,6 +4,7 @@ import uk.co.jacoblevy.parallax.core.model.CaptureMode
 import uk.co.jacoblevy.parallax.core.model.FrameQuality
 import uk.co.jacoblevy.parallax.core.model.FrameRejection
 import uk.co.jacoblevy.parallax.core.model.GuidancePrompt
+import uk.co.jacoblevy.parallax.core.model.MotionBand
 import uk.co.jacoblevy.parallax.core.model.ThermalStatus
 import uk.co.jacoblevy.parallax.core.model.TrackingState
 
@@ -24,7 +25,13 @@ data class GuidanceInputs(
     val keyframeCount: Int = 0,
     /** Fraction of recent frames that were rejected. */
     val recentRejectionRate: Float = 0f,
-)
+    /** Whether frames are being recorded, as opposed to the viewfinder merely being open. */
+    val recording: Boolean = false,
+    /** Since the last frame that was kept, or since recording started if none has been. */
+    val millisSinceKeyframe: Long = 0,
+) {
+    val motion: MotionBand get() = MotionBand.of(speedMetresPerSecond)
+}
 
 /**
  * Decides what to tell the user, right now.
@@ -68,6 +75,17 @@ object GuidanceEngine {
         }
         if (inputs.speedMetresPerSecond > MAX_SPEED_METRES_PER_SECOND) {
             add(GuidancePrompt.SlowDown)
+        }
+        // Only while recording. Standing still with the viewfinder open is what everyone does
+        // while deciding where to start, and nagging them for it is how a prompt gets ignored.
+        if (inputs.recording && inputs.motion == MotionBand.Still) {
+            add(GuidancePrompt.StartMoving)
+        }
+        // Nothing is being kept, and it has been long enough that this is not just the pause
+        // between two keyframes. Above the advice prompts: every one of those assumes frames
+        // are arriving, and here none are.
+        if (inputs.recording && inputs.millisSinceKeyframe > STALLED_MILLIS) {
+            add(GuidancePrompt.NothingAccepted)
         }
         when (inputs.quality.rejectionReason) {
             FrameRejection.Blurred -> add(GuidancePrompt.SlowDown)
@@ -132,6 +150,15 @@ object GuidanceEngine {
     /** Below this most phone cameras cannot focus, so the frames are soft whatever else is true. */
     const val MIN_FOCUS_DISTANCE_METRES = 0.18f
     const val HIGH_REJECTION_RATE = 0.4f
+
+    /**
+     * How long with nothing kept counts as stalled.
+     *
+     * Longer than the gap between keyframes at the slowest preset, which is a little over two
+     * seconds, so a working scan never trips it; short enough that a user who is getting
+     * nothing finds out while they can still do something about it.
+     */
+    const val STALLED_MILLIS = 5_000L
     const val MIN_FRAMES_FOR_COVERAGE_ADVICE = 12
 }
 

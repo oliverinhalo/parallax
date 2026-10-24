@@ -101,6 +101,31 @@ enum class GuidancePrompt(
         priority = 110,
         haptic = HapticCue.Warning,
     ),
+    /**
+     * Standing still while recording.
+     *
+     * Separate from "slow down" because the two are opposite mistakes with the same symptom --
+     * no frames being kept -- and a scan that is not moving produces nothing at all, where one
+     * moving too fast at least produces something.
+     */
+    StartMoving(
+        message = "Start moving",
+        detail = "Walk slowly around what you are scanning",
+        priority = 65,
+        haptic = HapticCue.Hint,
+    ),
+    /**
+     * Recording, but nothing is being kept.
+     *
+     * High priority, and above every piece of framing advice, because it is the one state where
+     * the user is doing everything the screen asks and getting a scan with nothing in it.
+     */
+    NothingAccepted(
+        message = "No frames are being kept",
+        detail = "Check the readout below for what is rejecting them",
+        priority = 97,
+        haptic = HapticCue.Warning,
+    ),
     KeepGoing(
         message = "Looking good",
         detail = "Keep moving around the subject",
@@ -133,9 +158,58 @@ data class CaptureStats(
     val thermalStatus: ThermalStatus = ThermalStatus.Nominal,
     val batteryPercent: Int = 100,
     val captureRateHz: Float = 0f,
+    /** How fast the camera is moving, from the pose path. */
+    val speedMetresPerSecond: Float = 0f,
+    /** Since the last frame that was kept, or since recording started if none has been. */
+    val millisSinceKeyframe: Long = 0,
 ) {
     val rejectionRate: Float
         get() = if (frameCount == 0) 0f else rejectedCount.toFloat() / frameCount
+
+    val motion: MotionBand get() = MotionBand.of(speedMetresPerSecond)
+}
+
+/**
+ * How fast the phone is moving, in bands rather than a number.
+ *
+ * A reading in metres per second means nothing to someone holding a phone, and the useful
+ * question is not "how fast" but "is this the speed that works". The bands exist because the
+ * answer has three parts a single warning cannot carry: too slow builds no parallax at all, too
+ * fast blurs every frame, and in between is the one the user is trying to find and hold.
+ */
+@Serializable
+enum class MotionBand(val label: String, val advice: String) {
+    Still("Still", "Move to build up the scan"),
+    Slow("Slow", "A little faster is fine"),
+    Ideal("Good", "Hold this pace"),
+    Fast("Fast", "Ease off slightly"),
+    TooFast("Too fast", "Slow down, frames are blurring"),
+    ;
+
+    val isUsable: Boolean get() = this == Slow || this == Ideal || this == Fast
+
+    companion object {
+        /**
+         * Thresholds in metres per second.
+         *
+         * [IDEAL_LOW] is where consecutive frames start to have enough baseline between them to
+         * triangulate; below it the frames are near-duplicates and get rejected. [FAST] is
+         * where a phone camera's exposure at indoor light begins to smear, which is the same
+         * threshold the guidance engine warns at.
+         */
+        const val STILL = 0.03f
+        const val IDEAL_LOW = 0.10f
+        const val IDEAL_HIGH = 0.40f
+        const val FAST = 0.55f
+
+        fun of(speedMetresPerSecond: Float): MotionBand = when {
+            speedMetresPerSecond < STILL -> Still
+            speedMetresPerSecond < IDEAL_LOW -> Slow
+            speedMetresPerSecond <= IDEAL_HIGH -> Ideal
+            speedMetresPerSecond <= FAST -> Fast
+            else -> TooFast
+        }
+    }
 }
 
 /**

@@ -31,6 +31,7 @@ internal fun ModelView(
 ) {
     val latest = rememberUpdatedState(state)
     val frame = rememberUpdatedState(onFrame)
+    val failed = rememberUpdatedState(onRendererFailed)
     val surface = remember { mutableStateOfSurface() }
 
     AndroidView(
@@ -77,6 +78,10 @@ internal fun ModelView(
                     override fun exposureStops(): Float =
                         latest.value.exposureStops + latest.value.editPlan.exposureStops
                 }
+                // The same report either way: a renderer that never started and one that
+                // stopped mid-frame leave the user in the same place, and the screen already
+                // knows how to say the 3D view is unavailable while keeping export working.
+                model.onRendererFailure = { failed.value() }
                 if (!model.start()) onRendererFailed()
                 surface.value = model
                 view.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->

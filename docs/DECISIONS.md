@@ -466,3 +466,62 @@ whose failures are otherwise invisible, but it is a trade.
 **Why not a debug-only build flavour.** The crash that matters is the one on a user's device,
 on their phone's OS version, with their data. A reporter that only exists in builds made by
 people who already have logcat reports nothing.
+
+---
+
+## ADR-017 — The one-session rule is enforced in code, not by convention
+
+**Status:** accepted
+
+**Context.** ARCore permits one session per process and enforces it in native code. Breaking the
+rule does not throw: the process dies, with no Kotlin exception for any handler to catch and
+nothing in the app able to report it. Two bugs reached a device that way, and a third was
+waiting. A renderer remembered on the capture mode built a second session on every mode switch.
+A session whose close was queued for a GL thread that had already stopped was never closed at
+all, so the second scan of a session met a session ARCore still considered open. And AR
+placement constructs a session of its own, which would have met whatever capture left behind.
+
+Each of those is a different call site making the same mistake, and each was written by someone
+who knew the rule.
+
+**Decision.** `ArSessionSlot` in `core:ar` holds the claim. A session claims it before touching
+ARCore and releases it on close, including when closing threw. A second claim fails and the
+screen says the camera is still busy.
+
+**Why there.** Above both claimants, because capture is not the only one. In `feature:capture` it
+would have protected capture from itself and left AR placement to find out the hard way.
+
+**What it costs.** Process-wide mutable state, which the rest of the app does not have and which
+makes two instances untestable in parallel in one JVM. The thing it guards is process-wide, so
+there is nowhere smaller to put it, but it is still the kind of state that spreads if nobody
+says why it is here. It also converts a class of bug from "dies in native code" to "shows a
+message that is not quite right" -- a user whose previous scan leaked the slot is told the
+camera is busy, which is true but does not name the bug. That is a trade worth making once and
+not twice.
+
+---
+
+## ADR-018 — Renderer callbacks report instead of propagating
+
+**Status:** accepted
+
+**Context.** Anything thrown from a `GLSurfaceView.Renderer` callback propagates out of the GL
+thread and ends the process. Filament's frame callback is on the main thread, which the crash
+reporter can at least see, but the result is still the app closing. Both sit behind GPU drivers,
+a camera service and native libraries that throw things no signature declares, on devices
+nobody here has.
+
+**Decision.** The capture renderer's three callbacks and the viewer's frame callback each catch
+`Throwable`, stop the loop, and report a failure the screen shows. Capture offers Import, which
+needs no AR; the viewer says the 3D view is unavailable and leaves export working.
+
+**Why catch `Throwable`.** The point is the unanticipated case. An `Error` from a native library
+is exactly as fatal to the user as an exception and exactly as reportable.
+
+**What it costs.** A caught `Throwable` hides real programming errors in the renderer: a null
+dereference in our own frame code now shows "scanning stopped unexpectedly" rather than
+crashing loudly in a way that would get fixed. Both are logged at error level, and the renderer
+stops rather than carrying on in an unknown state, but a bug in the drawing path is now quieter
+than it should be. The alternative is an app that vanishes, which is worse for the person
+holding it and no better for the person fixing it.
+

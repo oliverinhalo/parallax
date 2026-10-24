@@ -106,7 +106,14 @@ data class CaptureFrame(
 )
 
 @Serializable
-enum class TrackingState { Tracking, Limited, Lost, Initialising }
+enum class TrackingState(val label: String) {
+    Tracking("tracking"),
+
+    /** ARCore has a pose but does not trust it: too dark, too plain, or moving too fast. */
+    Limited("tracking is limited"),
+    Lost("tracking lost"),
+    Initialising("starting up"),
+}
 
 /** How usable a frame is, as measured during capture. */
 @Serializable

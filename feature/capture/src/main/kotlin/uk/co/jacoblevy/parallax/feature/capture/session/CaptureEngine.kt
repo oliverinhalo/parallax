@@ -157,6 +157,10 @@ class CaptureEngine(
             storageAvailableBytes = conditions.storageAvailableBytes,
             keyframeCount = recorder.frameCount,
             recentRejectionRate = recentRejectionRate(),
+            // `onFrame` is only called while the shutter is down, so reaching here is
+            // recording; the flag exists so the guidance rules can say so explicitly.
+            recording = startedAtMillis > 0,
+            millisSinceKeyframe = millisSinceKeyframe(nowMillis),
         )
         val promptChanged = guidance.update(inputs, nowMillis)
 
@@ -193,7 +197,7 @@ class CaptureEngine(
         }
 
         return CaptureTick(
-            stats = stats(nowMillis, quality),
+            stats = stats(nowMillis, quality, trackingState, speed),
             coverage = coverage.snapshot(),
             prompt = guidance.prompt,
             promptChanged = promptChanged,
@@ -264,7 +268,23 @@ class CaptureEngine(
         return recentRejections.count { it }.toFloat() / recentRejections.size
     }
 
-    private fun stats(nowMillis: Long, quality: FrameQuality): CaptureStats {
+    /**
+     * Since the last frame was kept, measured from the start of recording while none has been.
+     *
+     * Measuring from the start is what makes "nothing is being kept" detectable at all: a
+     * session that has never kept a frame has no last keyframe to measure from.
+     */
+    private fun millisSinceKeyframe(nowMillis: Long): Long {
+        val since = if (lastKeyframeMillis > 0) lastKeyframeMillis else startedAtMillis
+        return (nowMillis - since).coerceAtLeast(0)
+    }
+
+    private fun stats(
+        nowMillis: Long,
+        quality: FrameQuality,
+        trackingState: TrackingState,
+        speedMetresPerSecond: Float,
+    ): CaptureStats {
         val elapsed = (nowMillis - startedAtMillis).coerceAtLeast(0)
         val rate = if (elapsed <= 0) {
             0f
@@ -280,10 +300,15 @@ class CaptureEngine(
             storageUsedBytes = recorder.bytesWritten,
             storageAvailableBytes = conditions.storageAvailableBytes,
             elapsedMillis = elapsed,
-            trackingState = TrackingState.Tracking,
+            // The real state, not a constant. It was hard-coded to Tracking, which meant the
+            // readout said tracking was fine while limited tracking was rejecting every frame
+            // -- the single most useful fact about a scan that is producing nothing, hidden.
+            trackingState = trackingState,
             thermalStatus = conditions.thermalStatus,
             batteryPercent = conditions.batteryPercent,
             captureRateHz = rate,
+            speedMetresPerSecond = speedMetresPerSecond,
+            millisSinceKeyframe = millisSinceKeyframe(nowMillis),
         )
     }
 

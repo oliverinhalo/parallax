@@ -13,6 +13,7 @@ import com.google.ar.core.TrackingState as ArTrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.NotYetAvailableException
 import com.google.ar.core.exceptions.UnavailableException
+import uk.co.jacoblevy.parallax.core.ar.ArSessionSlot
 import uk.co.jacoblevy.parallax.core.model.CameraIntrinsics
 import uk.co.jacoblevy.parallax.core.model.DetectedPlane
 import uk.co.jacoblevy.parallax.core.model.PlaneKind
@@ -105,6 +106,12 @@ class ArCaptureSession(private val context: Context) {
      */
     fun create(preferDepth: Boolean): Boolean {
         if (session != null) return true
+        // Claimed before ARCore is touched. Constructing a second `Session` while one is open
+        // kills the process in native code, so this has to be the first thing that happens.
+        if (!ArSessionSlot.acquire(this)) {
+            failure = ArSessionFailure.AlreadyInUse
+            return false
+        }
         return try {
             val created = Session(context)
             val config = created.config.apply {
@@ -130,11 +137,21 @@ class ArCaptureSession(private val context: Context) {
         } catch (unavailable: UnavailableException) {
             // Classified rather than logged: every case here has a specific thing the user can
             // do about it, which `ArSessionFailure` carries.
+            ArSessionSlot.release(this)
             failure = ArSessionFailure.from(unavailable)
             false
         } catch (expected: SecurityException) {
             // The camera permission was revoked while the screen was open.
+            ArSessionSlot.release(this)
             failure = ArSessionFailure.PermissionRevoked
+            false
+        } catch (unexpected: RuntimeException) {
+            // ARCore throws undocumented runtime exceptions on some devices -- a bad camera
+            // config, a vendor camera service that refuses the session. Reported rather than
+            // propagated: this runs on the GL thread, where anything thrown ends the process.
+            ArSessionSlot.release(this)
+            Log.w(TAG, "creating the AR session failed", unexpected)
+            failure = ArSessionFailure.Unknown
             false
         }
     }
@@ -173,6 +190,9 @@ class ArCaptureSession(private val context: Context) {
             .onFailure { Log.w(TAG, "closing the AR session failed", it) }
         session = null
         textureSet = false
+        // Released even when closing threw. A slot held by a session nobody can reach is a
+        // capture screen that refuses to open for the rest of the process's life.
+        ArSessionSlot.release(this)
     }
 
     /**
@@ -301,9 +321,17 @@ enum class ArSessionFailure(val message: String, val userAction: String) {
         message = "The camera is in use by another app.",
         userAction = "Close the other app and try again.",
     ),
+    AlreadyInUse(
+        message = "The previous scan is still closing.",
+        userAction = "Go back and open the camera again in a moment.",
+    ),
     PermissionRevoked(
         message = "Camera access was turned off.",
         userAction = "Grant camera access in settings.",
+    ),
+    Internal(
+        message = "Scanning stopped unexpectedly.",
+        userAction = "Try again. If it keeps happening, Import mode does not use AR.",
     ),
     Unknown(
         message = "AR scanning could not start.",

@@ -157,6 +157,10 @@ private class ArViewfinderRenderer(
     @Volatile
     private var released = false
 
+    /** Set once a callback has thrown. The renderer draws nothing more after that. */
+    @Volatile
+    private var fatal = false
+
     private var viewWidth = 0
     private var viewHeight = 0
     private var reportedFailure: ArSessionFailure? = null
@@ -181,11 +185,20 @@ private class ArViewfinderRenderer(
         resumeRequested = false
     }
 
+    /**
+     * Give up the session, from the main thread.
+     *
+     * The close happens here rather than on the GL thread, because by the time this is called
+     * the surface has already been paused and the GL thread is not going to run again -- which
+     * is how the session used to leak: the close was queued for a thread that was already
+     * stopped, and the next scan then met a session ARCore still considered open.
+     */
     fun release() {
         released = true
+        session.close()
     }
 
-    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) = guarded {
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         background.createOnGlThread()
         if (session.create(preferDepth)) {
@@ -195,28 +208,53 @@ private class ArViewfinderRenderer(
         }
     }
 
-    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) = guarded {
         GLES20.glViewport(0, 0, width, height)
         viewWidth = width
         viewHeight = height
         session.setDisplayGeometry(display, width, height)
     }
 
-    override fun onDrawFrame(gl: GL10?) {
+    override fun onDrawFrame(gl: GL10?) = guarded {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-        if (!serviceLifecycle()) return
+        if (!serviceLifecycle()) return@guarded
 
         val frame = session.update()
         if (frame == null) {
             session.failure?.let(::report)
-            return
+            return@guarded
         }
         background.updateGeometry(frame.raw)
         background.draw()
 
-        if (!recording) return
-        val engine = engineProvider() ?: return
+        if (!recording) return@guarded
+        val engine = engineProvider() ?: return@guarded
         processFrame(frame, engine)
+    }
+
+    /**
+     * Run [body] on the GL thread without letting it end the process.
+     *
+     * Anything thrown from a `GLSurfaceView.Renderer` callback propagates out of the GL thread,
+     * which kills the app outright: no screen, no dialog on some devices, and nothing for the
+     * crash reporter to show because the report is written and then the thread that would have
+     * displayed it is gone. The whole of capture is behind drivers, a camera service and native
+     * ARCore, which between them throw things no signature admits to. So the callbacks report
+     * instead of dying, and the scan stops with an explanation on screen.
+     *
+     * Once one has failed the renderer stops: a GL context that threw is not a context worth
+     * drawing another frame against, and repeating the failure every frame would bury it.
+     */
+    private inline fun guarded(body: () -> Unit) {
+        if (fatal) return
+        try {
+            body()
+        } catch (@Suppress("TooGenericExceptionCaught") unexpected: Throwable) {
+            fatal = true
+            Log.e(TAG, "the capture renderer failed", unexpected)
+            runCatching { session.close() }
+            report(ArSessionFailure.Internal)
+        }
     }
 
     /**

@@ -1,5 +1,6 @@
 package uk.co.jacoblevy.parallax.feature.viewer.render
 
+import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
 import android.view.SurfaceView
@@ -77,11 +78,32 @@ class ModelSurface(private val surfaceView: SurfaceView) {
     private val choreographer: Choreographer = Choreographer.getInstance()
     private var running = false
 
+    /**
+     * Called when the renderer gives up, so the screen can say so.
+     *
+     * Set by the caller. Null means the failure is only logged, which is the right behaviour
+     * for a surface being torn down and the wrong one for a viewer the user is looking at.
+     */
+    var onRendererFailure: ((String) -> Unit)? = null
+
+    private var fatal = false
+
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (!running) return
+            if (!running || fatal) return
             choreographer.postFrameCallback(this)
-            drawFrame()
+            // Filament is a native renderer behind a GPU driver: a lost context, an unsupported
+            // format or a vendor bug surfaces here as something no signature declares. Drawing
+            // nothing and saying so beats taking the app down mid-frame, and the model is still
+            // on disk and still exportable, which is most of what the viewer was for.
+            try {
+                drawFrame()
+            } catch (@Suppress("TooGenericExceptionCaught") unexpected: Throwable) {
+                fatal = true
+                running = false
+                Log.e(TAG, "the model renderer failed", unexpected)
+                onRendererFailure?.invoke("The 3D view stopped working on this device.")
+            }
         }
     }
 
@@ -341,5 +363,7 @@ class ModelSurface(private val surfaceView: SurfaceView) {
         const val BLUE = 2
 
         val BACKGROUND = floatArrayOf(0.043f, 0.047f, 0.055f)
+
+        const val TAG = "ModelSurface"
     }
 }

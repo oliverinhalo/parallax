@@ -65,6 +65,7 @@ import uk.co.jacoblevy.parallax.core.designsystem.theme.Sizing
 import uk.co.jacoblevy.parallax.core.designsystem.theme.Spacing
 import uk.co.jacoblevy.parallax.core.model.CaptureMode
 import uk.co.jacoblevy.parallax.core.model.GuidancePrompt
+import uk.co.jacoblevy.parallax.core.model.TrackingState
 import uk.co.jacoblevy.parallax.core.model.HapticCue
 import uk.co.jacoblevy.parallax.core.model.QualityPreset
 import uk.co.jacoblevy.parallax.feature.capture.CaptureEvent
@@ -220,7 +221,17 @@ private fun TopBar(state: CaptureUiState, onCancelled: () -> Unit, modifier: Mod
         Spacer(Modifier.weight(1f))
         Column(horizontalAlignment = Alignment.End) {
             if (state.phase != CapturePhase.Ready) {
-                CoverageDome(state.coverage)
+                // Larger while recording. It is the only picture of what has actually been
+                // captured, and at the resting size it was a decoration rather than something
+                // a user could steer by.
+                CoverageDome(
+                    coverage = state.coverage,
+                    size = if (state.isRecording) {
+                        Sizing.coverageDomeSizeLarge
+                    } else {
+                        Sizing.coverageDomeSize
+                    },
+                )
                 Spacer(Modifier.height(Spacing.sm))
             }
             WarningBadges(state)
@@ -278,6 +289,50 @@ private fun WarningBadges(state: CaptureUiState) {
                     text = formatBytes(stats.storageUsedBytes),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * What capture is actually doing, in one line.
+ *
+ * Kept against seen, and the reason the rest were not kept. A scan that produces nothing used
+ * to look identical to one going perfectly -- the counter was the only difference and it was
+ * behind a setting -- so this is always visible while recording. It is also the line the
+ * "no frames are being kept" prompt tells the user to look at, which it can only do if it is
+ * on screen without being switched on first.
+ */
+@Composable
+private fun CaptureReadout(state: CaptureUiState) {
+    val stats = state.stats
+    val tracking = stats.trackingState
+    val reason = when {
+        tracking != TrackingState.Tracking -> tracking.label
+        stats.keyframeCount == 0 && stats.frameCount == 0 -> "waiting for the camera"
+        else -> null
+    }
+
+    GlassPanel(cornerRadius = Radii.pill) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${stats.keyframeCount} kept",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+            )
+            Spacer(Modifier.width(Spacing.xs))
+            Text(
+                text = "of ${stats.frameCount}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = MUTED_ALPHA),
+            )
+            if (reason != null) {
+                Spacer(Modifier.width(Spacing.xs))
+                Text(
+                    text = "· $reason",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ParallaxTheme.colors.warning,
                 )
             }
         }
@@ -351,6 +406,16 @@ private fun Controls(state: CaptureUiState, onEvent: (CaptureEvent) -> Unit, mod
             Spacer(Modifier.height(Spacing.md))
             QualitySwitcher(state, onEvent)
             Spacer(Modifier.height(Spacing.lg))
+        }
+
+        if (state.isRecording) {
+            MotionMeter(
+                band = state.stats.motion,
+                modifier = Modifier.width(MotionMeterWidth),
+            )
+            Spacer(Modifier.height(Spacing.xs))
+            CaptureReadout(state)
+            Spacer(Modifier.height(Spacing.md))
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -664,6 +729,7 @@ private const val SCRIM_FADE_BOTTOM = 0.62f
 private const val PROMPT_TOP = 96
 private const val DETAIL_ALPHA = 0.75f
 private const val COVERAGE_GOOD = 0.6f
+private const val MUTED_ALPHA = 0.6f
 private const val LOW_BATTERY = 20
 private const val SHUTTER_RECORDING_SCALE = 1.06f
 private const val SHUTTER_RING = 3

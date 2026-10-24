@@ -81,6 +81,9 @@ object Sizing {
     val progressBarHeight: Dp = 6.dp
     val coverageDomeSize: Dp = 108.dp
 
+    /** While recording, where the coverage map is what the user is steering by. */
+    val coverageDomeSizeLarge: Dp = 148.dp
+
     /** The storage dashboard's stacked bar. Thick enough to read its segments at a glance. */
     val storageBarHeight: Dp = 14.dp
 }

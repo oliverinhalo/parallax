@@ -560,3 +560,39 @@ recomposes between them, and that a stored crash report is consumed by the attem
 The single-session rule itself is held by one `remember` with no key and a comment saying why --
 which is weaker than a test, and worth knowing.
 
+---
+
+## Phase 15 — Reliability, and the motion the screen never showed
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| The second scan of a session closed the app | `release()` set a flag, and the session's `close()` happened on the next GL frame -- which never came, because the surface had already been paused. The session stayed open, and the next scan's session was ARCore's second, which is fatal in native code. It closes from the main thread now, after the GL thread has stopped. |
+| The readout said tracking was fine while nothing was being kept | `CaptureEngine.stats()` hard-coded `trackingState = Tracking`. Limited tracking rejecting every frame -- the single most useful fact about a scan producing nothing -- was invisible by construction. |
+| A scan that never kept a frame could not be distinguished from one going well | Nothing measured the time since a frame was kept, and with no keyframe yet there was nothing to measure from. It runs from the start of recording, and past five seconds the screen says so. |
+| Standing still looked identical to doing it right | The guidance engine warned about speed in one direction only. There was no prompt for not moving, which is the mistake that produces nothing at all. |
+
+### What is new
+
+- `ArSessionSlot` (ADR-017): the one-session rule enforced in `core:ar`, above both capture and
+  AR placement, with a test for each way the previous bugs broke it.
+- Renderer callbacks report rather than propagate (ADR-018), in capture and in the viewer.
+- `MotionBand`: five bands with the two good ones in the middle, shown as a lit segment meter
+  while recording. The band it warns at is asserted equal to the speed the keyframe selector
+  rejects at, so the meter cannot drift away from the thing it is describing.
+- A capture readout that is always visible while recording: frames kept, frames seen, and the
+  tracking state when it is not Tracking. The "no frames are being kept" prompt points at it,
+  which it could not do while it was behind a setting.
+- The coverage map is larger while recording, because it is the only picture of what has
+  actually been captured.
+
+### Verification boundaries
+
+The crash these fix is native and cannot be reproduced here: there is no ARCore in CI. What is
+tested is the rule that prevents it (`ArSessionSlotTest`, including a release from a non-holder,
+which is how the mode-switch bug worked), that capture composes and recomposes through every
+mode and every motion band, and that the engine reports the tracking state and stall clock it
+was given. That the renderer's guard catches a real driver fault is not tested and cannot be;
+what is tested is that nothing in the app's own code throws on the paths CI can run.
+

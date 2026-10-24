@@ -12,6 +12,7 @@ import uk.co.jacoblevy.parallax.core.model.CaptureMode
 import uk.co.jacoblevy.parallax.core.model.DeviceCapabilities
 import uk.co.jacoblevy.parallax.core.model.FrameQuality
 import uk.co.jacoblevy.parallax.core.model.GuidancePrompt
+import uk.co.jacoblevy.parallax.core.model.MotionBand
 import uk.co.jacoblevy.parallax.core.model.Pose
 import uk.co.jacoblevy.parallax.core.model.QualityPreset
 import uk.co.jacoblevy.parallax.core.model.ThermalStatus
@@ -178,6 +179,48 @@ class CaptureEngineTest {
         assertThat(tick.recorded).isNull()
         assertThat(tick.prompt).isEqualTo(GuidancePrompt.HoldStill)
         assertThat(engine.keyframeCount).isEqualTo(0)
+    }
+
+    @Test
+    fun `the readout reports the tracking state it was given, not a constant`() {
+        // It reported Tracking unconditionally. On a device that meant the overlay said
+        // tracking was fine while limited tracking rejected every frame, which is the one
+        // fact that explains a scan producing nothing.
+        val engine = engine()
+        engine.start(0)
+        engine.updateConditions(conditions())
+
+        val tick = engine.feed(0, pose = null, tracking = TrackingState.Limited)
+
+        assertThat(tick.stats.trackingState).isEqualTo(TrackingState.Limited)
+    }
+
+    @Test
+    fun `the readout carries the speed and the time since a frame was kept`() {
+        val engine = engine()
+        engine.start(0)
+        engine.updateConditions(conditions())
+
+        engine.feed(nowMillis = 0, pose = poseAt(0f))
+        // A metre along, a second later: one metre per second, which is past every band.
+        val moved = engine.feed(nowMillis = 1_000, pose = poseAt(1f))
+
+        assertThat(moved.stats.speedMetresPerSecond).isGreaterThan(MotionBand.FAST)
+        assertThat(moved.stats.motion).isEqualTo(MotionBand.TooFast)
+    }
+
+    @Test
+    fun `with nothing ever kept the stall clock runs from the start of recording`() {
+        // Otherwise a session that never keeps a frame has no last keyframe to measure from,
+        // and the one state that most needs reporting is the one that cannot be detected.
+        val engine = engine()
+        engine.start(nowMillis = 1_000)
+        engine.updateConditions(conditions())
+
+        val tick = engine.feed(nowMillis = 9_000, pose = null, tracking = TrackingState.Lost)
+
+        assertThat(tick.stats.millisSinceKeyframe).isEqualTo(8_000)
+        assertThat(tick.prompt).isEqualTo(GuidancePrompt.HoldStill)
     }
 
     @Test
