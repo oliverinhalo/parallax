@@ -87,7 +87,15 @@ class TsdfVolume {
   bool sampleDistance(const Vec3& world_point, float* out_distance) const;
 
   /// Extract the zero level set as a triangle mesh (welded, with normals).
-  Mesh extractMesh() const;
+  /**
+   * Extract the surface.
+   *
+   * @param cell_size_used optional out-parameter: the cell size the extraction actually used,
+   *   which is the voxel size unless the volume was too large to walk that finely. The caller
+   *   reports it, because a mesh coarser than the preset asked for is something the user should
+   *   be told rather than left to wonder about.
+   */
+  Mesh extractMesh(double* cell_size_used = nullptr) const;
 
   /// Dense coloured point cloud of surface-adjacent voxels.
   void extractPointCloud(std::vector<Vec3f>* out_points, std::vector<Vec3f>* out_normals,

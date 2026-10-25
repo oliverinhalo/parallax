@@ -810,3 +810,30 @@ the decision, not of a scan: nothing in CI can produce a capture whose depth map
 range. The room scan's meshing failure is not fixed at all -- the new message is what will say
 which of the two faults it is.
 
+---
+
+## Phase 23 — "No surface was found" meant "the grid was too big"
+
+The diagnostic added in phase 22 paid for itself on the first scan. The device reported nine
+and a half million observed voxels in 25,732 blocks, and no surface -- which is not a thing that
+happens. A volume with that many voxels has a surface in it.
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| A room scan fused 9.6M voxels and then found no surface in them | Marching tetrahedra walks a dense lattice over the volume's bounds, so its cost is the bounds divided by the cell size, cubed -- nothing to do with how much surface is in there. Over 400 million points it returned an empty mesh and said nothing. A room scan at 3 cm voxels, spread by tracking drift and by depth samples reaching across the room, asks for more than a billion. The extraction coarsens the cell size to fit now, and says so; refusing silently was the bug, and the message the user got was about the wrong thing entirely. |
+| `integrated_frames` and `dropped_samples` read zero in that message | They are not serialised in the fusion checkpoint, and meshing reads the volume back from it. Not the cause of anything, but it made the message say "from 0 frames" about a volume built from sixty-nine, which is the sort of detail that sends the next hour in the wrong direction. |
+
+### Verification boundaries
+
+The coarsening is tested at the level of the decision -- five tests over box sizes from 5 cm to
+400 m, including the 40 x 20 x 40 m case that failed -- not on a volume that large, which
+nothing in CI can build. Whether the room scan now produces a usable model is unknown; it will
+produce *a* model, at a coarser cell size than the preset asked for, and the stage will say so.
+
+That the bounds grow to 40 m in the first place is not addressed. Some of it is real -- a room
+scan does see across a room -- and some is tracking drift and outlying depth samples, which a
+percentile over the observed voxels would trim. The coarsening makes a large volume work; it
+does not make the volume the right size.
+

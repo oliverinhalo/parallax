@@ -1564,7 +1564,18 @@ StageOutcome Pipeline::Impl::runMeshing(const ProgressCallback& progress,
   if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
 
   report(progress, Stage::Meshing, 0.3, "Extracting the surface");
-  Mesh mesh = volume.extractMesh();
+  double cell_size = config.voxel_size;
+  Mesh mesh = volume.extractMesh(&cell_size);
+  // Said out loud when the volume was too large to walk at the preset's voxel size. The user
+  // gets a coarser model than they chose, which is worth knowing and worth acting on -- a
+  // smaller scan, or a coarser preset that spends its budget better.
+  const bool coarsened = cell_size > config.voxel_size * 1.01;
+  const std::string cell_note =
+      coarsened ? "; extracted at " + std::to_string(static_cast<int>(cell_size * 1000)) +
+                      " mm rather than " +
+                      std::to_string(static_cast<int>(config.voxel_size * 1000)) +
+                      " mm, because the scan covers too much ground to mesh that finely"
+                : "";
   if (mesh.empty()) {
     // What the volume contained, not just that the extraction was empty. A volume with no
     // voxels at all and one whose voxels never cross from outside a surface to inside it are
@@ -1590,7 +1601,8 @@ StageOutcome Pipeline::Impl::runMeshing(const ProgressCallback& progress,
     return StageOutcome{false, false, "could not write the mesh checkpoint"};
   }
   return StageOutcome{true, false,
-                      std::to_string(mesh.triangleCount()) + " triangles extracted"};
+                      std::to_string(mesh.triangleCount()) + " triangles extracted" +
+                          cell_note};
 }
 
 StageOutcome Pipeline::Impl::runMeshCleanup(const ProgressCallback& progress,

@@ -1,5 +1,7 @@
 #include "parallax/fusion/TsdfVolume.h"
 
+#include "parallax/fusion/ExtractionGrid.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -292,13 +294,18 @@ AxisAlignedBox TsdfVolume::observedBounds() const {
   return box;
 }
 
-Mesh TsdfVolume::extractMesh() const {
+Mesh TsdfVolume::extractMesh(double* cell_size_used) const {
   AxisAlignedBox bounds = observedBounds();
   if (!bounds.valid()) return Mesh{};
   // Pad by a voxel so surfaces touching the observed boundary are not clipped.
   const double voxel = config_.voxel_size;
   bounds.min -= Vec3::Constant(voxel);
   bounds.max += Vec3::Constant(voxel);
+  // Coarsened rather than refused when the volume is too large to walk at the voxel size. The
+  // extraction used to return an empty mesh, which the pipeline could not tell apart from a
+  // volume with no surface in it and reported as exactly that.
+  const double cell = extractionCellSize(bounds, voxel, kMaxLatticePoints);
+  if (cell_size_used != nullptr) *cell_size_used = cell;
 
   const auto sample = [this](const Vec3& p, float* value, std::array<uint8_t, 3>* color) {
     if (!sampleDistance(p, value)) return false;
@@ -313,7 +320,7 @@ Mesh TsdfVolume::extractMesh() const {
     }
     return true;
   };
-  return marchingTetrahedra(bounds, voxel, sample);
+  return marchingTetrahedra(bounds, cell, sample);
 }
 
 void TsdfVolume::extractPointCloud(std::vector<Vec3f>* out_points,
