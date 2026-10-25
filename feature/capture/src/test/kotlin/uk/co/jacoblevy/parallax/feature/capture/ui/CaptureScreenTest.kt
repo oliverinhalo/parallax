@@ -45,7 +45,7 @@ class CaptureScreenTest {
                     onCancelled = {},
                     engineProvider = { null },
                     onTick = {},
-                    onSessionFailure = {},
+                    onSessionFailure = { _, _ -> },
                 )
             }
         }
@@ -111,6 +111,16 @@ class CaptureScreenTest {
 
         state.value = CaptureUiState(sessionFailure = ArSessionFailure.CameraUnavailable)
         compose.waitForIdle()
+
+        // The detail is the only thing an unexpected renderer failure has to say, so it has to
+        // reach the screen rather than only logcat.
+        state.value = CaptureUiState(
+            sessionFailure = ArSessionFailure.Internal,
+            sessionFailureDetail = "UnsatisfiedLinkError: libarcore_sdk_jni.so",
+        )
+        compose.waitForIdle()
+
+        compose.onNodeWithText("UnsatisfiedLinkError: libarcore_sdk_jni.so").assertExists()
     }
 
     private companion object {

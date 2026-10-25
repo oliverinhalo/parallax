@@ -63,6 +63,8 @@ data class CaptureUiState(
     val prompt: GuidancePrompt? = null,
     val projectId: String? = null,
     val sessionFailure: ArSessionFailure? = null,
+    /** What threw, for the failures whose cause is not in their name. */
+    val sessionFailureDetail: String? = null,
     val error: ParallaxError? = null,
     val hapticsEnabled: Boolean = true,
     val showAdvancedStats: Boolean = false,
@@ -167,7 +169,9 @@ class CaptureViewModel @Inject constructor(
     fun onEvent(event: CaptureEvent) {
         when (event) {
             is CaptureEvent.ModeSelected -> if (local.value.phase == CapturePhase.Ready) {
-                local.update { it.copy(mode = event.mode, sessionFailure = null) }
+                local.update {
+                    it.copy(mode = event.mode, sessionFailure = null, sessionFailureDetail = null)
+                }
             }
             is CaptureEvent.QualitySelected -> local.update { it.copy(quality = event.preset) }
             CaptureEvent.Start -> startSession()
@@ -183,7 +187,9 @@ class CaptureViewModel @Inject constructor(
                 haptics.play(HapticCue.Hint, local.value.hapticsEnabled)
             }
             is CaptureEvent.ImportMedia -> importMedia(event.uris)
-            CaptureEvent.DismissError -> local.update { it.copy(error = null, sessionFailure = null) }
+            CaptureEvent.DismissError -> local.update {
+                it.copy(error = null, sessionFailure = null, sessionFailureDetail = null)
+            }
         }
     }
 
@@ -212,8 +218,14 @@ class CaptureViewModel @Inject constructor(
         }
     }
 
-    fun onSessionFailure(failure: ArSessionFailure) {
-        local.update { it.copy(sessionFailure = failure, phase = CapturePhase.Ready) }
+    fun onSessionFailure(failure: ArSessionFailure, detail: String? = null) {
+        local.update {
+            it.copy(
+                sessionFailure = failure,
+                sessionFailureDetail = detail,
+                phase = CapturePhase.Ready,
+            )
+        }
     }
 
     /** The screen is going away; release everything that holds the camera. */

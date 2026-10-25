@@ -37,6 +37,14 @@ constexpr int kMvsSamples = 48;
 constexpr int kMvsFastDownscale = 3;
 constexpr int kMvsFastSamples = 32;
 
+/// The fewest frames that can produce a surface rather than merely triangulate.
+///
+/// Two views are enough to recover depth along one line of sight, which is why the arithmetic
+/// minimum is two, and not enough to see around anything: fusion then finds no closed surface
+/// and the failure arrives six stages after the cause. Eight is the fewest that has produced a
+/// usable model in the golden datasets here, and it is a number a user can act on.
+constexpr size_t kMinKeyframesForReconstruction = 8;
+
 /// Above this voxel size there is no point estimating depth finely: the volume
 /// cannot represent the detail.
 constexpr float kCoarseVoxelSizeM = 0.012f;
@@ -516,8 +524,16 @@ StageOutcome Pipeline::Impl::runIngest(const ProgressCallback& progress,
     return StageOutcome{false, false, "no readable frames in the project manifest"};
   }
   const std::vector<int> keyframes = selectKeyframes();
-  if (keyframes.size() < 2) {
-    return StageOutcome{false, false, "at least two keyframes are needed to reconstruct"};
+  // Two is the arithmetic minimum for triangulation and nowhere near enough for a surface: a
+  // pair of views sees one side of one thing, so fusion finds no closed surface and the run
+  // dies six stages after the problem, saying the depth and the poses disagree. Refused here,
+  // where the number is still something the user can act on.
+  if (keyframes.size() < kMinKeyframesForReconstruction) {
+    return StageOutcome{false, false,
+                        "only " + std::to_string(keyframes.size()) +
+                            " usable frames; reconstruction needs at least " +
+                            std::to_string(kMinKeyframesForReconstruction) +
+                            ", taken from different positions around the subject"};
   }
   if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
 

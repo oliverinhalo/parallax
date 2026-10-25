@@ -114,7 +114,7 @@ internal fun CaptureScreen(
     onCancelled: () -> Unit,
     engineProvider: () -> CaptureEngine?,
     onTick: (CaptureTick) -> Unit,
-    onSessionFailure: (ArSessionFailure) -> Unit,
+    onSessionFailure: (ArSessionFailure, String?) -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (!state.blockedByArCore && state.mode.requiresArCore) {
@@ -652,6 +652,18 @@ private fun SessionFailurePanel(
                 color = Color.White.copy(alpha = DETAIL_ALPHA),
                 textAlign = TextAlign.Center,
             )
+            // Only for the failures that have no explanation of their own. For "ARCore needs
+            // updating" the user action is the whole story and a class name underneath it
+            // would be noise; for "stopped unexpectedly" it is the only story there is.
+            state.sessionFailureDetail?.let { detail ->
+                Spacer(Modifier.height(Spacing.sm))
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = DETAIL_ALPHA),
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(Modifier.height(Spacing.lg))
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 ParallaxTextButton(

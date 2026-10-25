@@ -622,3 +622,19 @@ would have said so is the one that was being dropped. It is a real failure on a 
 reproduced in a test, and it explains a retry that resumes from fusion and fails identically.
 If the device reports something else now, the message will say what.
 
+---
+
+## Phase 17 — Two photos, and a failure with nothing to say
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| An import of two photos failed at fusing surfaces, talking about depth maps and camera poses | Ingest required two keyframes, which is the arithmetic minimum for triangulation and sees around nothing. The run then died six stages past the only actionable fact, which was that there were two photos. Ingest now requires eight and says how many there were. |
+| "Scanning stopped unexpectedly" with no way to find out what | The renderer guard added in phase 15 classified the throwable and logged it, and the screen showed only the classification. The exception's own description now reaches the panel, root cause first and with its type, since these only happen on devices nobody here has. |
+
+### Verification boundaries
+
+The AR failure itself is still unexplained: the guard catches it and now reports what threw, but
+nothing here reproduces it. The detail on screen is the mechanism for finding out, not the fix.
+

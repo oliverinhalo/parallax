@@ -508,14 +508,15 @@ TEST(Pipeline, FusionSaysWhenNoKeyframeHadADepthMap) {
 /// failure has to say so rather than producing an empty model.
 TEST(Pipeline, FailsWithAClearMessageWhenDepthCannotBeEstimated) {
   SyntheticCapture capture;
-  // Two frames from almost the same position: no baseline, so no depth is
-  // recoverable from them however good the images are.
+  // Enough frames to get past ingest, but all from almost the same position: there is no
+  // baseline, so no depth is recoverable from them however good the images are.
   {
     SyntheticScene scene = SyntheticScene::objectOnTable();
     const CameraIntrinsics intrinsics = phoneIntrinsics(160, 120);
     std::vector<Pose> poses;
-    poses.push_back(SyntheticScene::lookAt(Vec3(0, 0.4, -1.0), Vec3(0, 0.3, 0)));
-    poses.push_back(SyntheticScene::lookAt(Vec3(0, 0.4, -1.0), Vec3(0, 0.3, 0)));
+    for (int i = 0; i < 10; ++i) {
+      poses.push_back(SyntheticScene::lookAt(Vec3(0, 0.4, -1.0), Vec3(0, 0.3, 0)));
+    }
     capture.writeCapture(scene, intrinsics, poses, /*with_poses=*/true, /*with_depth=*/false);
   }
   Pipeline pipeline(objectConfig(capture.path()));
@@ -525,6 +526,23 @@ TEST(Pipeline, FailsWithAClearMessageWhenDepthCannotBeEstimated) {
   const StageOutcome outcome = pipeline.runStage(Stage::Depth, nullptr, nullptr);
   EXPECT_FALSE(outcome.success);
   EXPECT_NE(outcome.message.find("depth"), std::string::npos) << outcome.message;
+}
+
+/// A handful of photos is refused where the number still means something.
+///
+/// Two views triangulate and see around nothing, so fusion found no closed surface and the run
+/// died at fusing surfaces talking about depth maps and camera poses -- six stages after the
+/// only actionable fact, which is that there were two photos.
+TEST(Pipeline, RefusesTooFewFramesAtIngestRatherThanFailingAtFusion) {
+  SyntheticCapture capture;
+  capture.writeObjectCapture(2, 160, /*with_poses=*/true, /*with_depth=*/true);
+  Pipeline pipeline(objectConfig(capture.path()));
+
+  const StageOutcome outcome = pipeline.runStage(Stage::Ingest, nullptr, nullptr);
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_NE(outcome.message.find("at least"), std::string::npos) << outcome.message;
+  EXPECT_NE(outcome.message.find("2 usable frames"), std::string::npos) << outcome.message;
 }
 
 TEST(Pipeline, AStageThatNeedsAMissingCheckpointFailsRatherThanCrashing) {

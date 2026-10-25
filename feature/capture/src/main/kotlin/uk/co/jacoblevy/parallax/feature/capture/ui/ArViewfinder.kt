@@ -40,7 +40,7 @@ internal fun ArViewfinder(
     recording: Boolean,
     engineProvider: () -> CaptureEngine?,
     onTick: (CaptureTick) -> Unit,
-    onFailure: (ArSessionFailure) -> Unit,
+    onFailure: (ArSessionFailure, String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -63,7 +63,7 @@ internal fun ArViewfinder(
             context = context,
             engineProvider = { currentEngineProvider() },
             onTick = { currentOnTick(it) },
-            onFailure = { currentOnFailure(it) },
+            onFailure = { failure, detail -> currentOnFailure(failure, detail) },
         )
     }
     renderer.recording = recording
@@ -131,7 +131,7 @@ private class ArViewfinderRenderer(
     private val context: Context,
     private val engineProvider: () -> CaptureEngine?,
     private val onTick: (CaptureTick) -> Unit,
-    private val onFailure: (ArSessionFailure) -> Unit,
+    private val onFailure: (ArSessionFailure, String?) -> Unit,
 ) : GLSurfaceView.Renderer {
 
     private val background = CameraBackgroundRenderer()
@@ -253,7 +253,10 @@ private class ArViewfinderRenderer(
             fatal = true
             Log.e(TAG, "the capture renderer failed", unexpected)
             runCatching { session.close() }
-            report(ArSessionFailure.Internal)
+            // The exception's own description goes to the screen, not only to logcat. A
+            // device nobody here has is the only place these happen, and "stopped
+            // unexpectedly" with no detail is a dead end for whoever is holding it.
+            report(ArSessionFailure.Internal, describe(unexpected))
         }
     }
 
@@ -332,10 +335,23 @@ private class ArViewfinderRenderer(
         }
     }
 
-    private fun report(failure: ArSessionFailure) {
+    private fun report(failure: ArSessionFailure, detail: String? = null) {
         if (reportedFailure == failure) return
         reportedFailure = failure
-        onFailure(failure)
+        onFailure(failure, detail)
+    }
+
+    /**
+     * One line naming what went wrong, for the screen.
+     *
+     * The class name is included because the message is often null -- a `NullPointerException`
+     * or an `UnsatisfiedLinkError` says everything in its type -- and the root cause is used
+     * because the top of the chain is usually the wrapper, not the fault.
+     */
+    private fun describe(throwable: Throwable): String {
+        val root = generateSequence(throwable, Throwable::cause).last()
+        val type = root.javaClass.simpleName
+        return root.message?.takeIf(String::isNotBlank)?.let { "$type: $it" } ?: type
     }
 
     /**
