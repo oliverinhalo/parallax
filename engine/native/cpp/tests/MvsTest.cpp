@@ -139,6 +139,47 @@ TEST(MvsTest, RecoversDepthOnATexturedObject) {
   EXPECT_GT(accuracy.inlier_fraction, 0.5) << "inliers " << accuracy.inlier_fraction;
 }
 
+/// Threads change the speed and nothing else.
+///
+/// The sweep went from one core to all of them because it was 97% of a real run -- forty
+/// seconds a frame with three cores idle. The thing worth testing about a parallelisation is
+/// not that it is faster, which a benchmark says, but that it computed the same answer: a race
+/// here would show up as a depth map that is subtly different run to run, which is far worse
+/// than a slow one and almost impossible to notice.
+TEST(MvsTest, GivesTheSameDepthMapWhateverTheThreadCount) {
+  const SyntheticScene scene = SyntheticScene::objectOnTable();
+  const auto rendered = renderOrbit(scene, Vec3(0, 0.25, 0), 1.1, 0.35, 12);
+  const auto views = asMvsViews(rendered);
+
+  const int reference = 6;
+  const std::vector<int> neighbour_indices = selectNeighbours(views, reference, 4, 1.1);
+  ASSERT_FALSE(neighbour_indices.empty());
+  std::vector<MvsView> neighbours;
+  for (int index : neighbour_indices) neighbours.push_back(views[index]);
+
+  MvsConfig config;
+  config.min_depth = 0.5;
+  config.max_depth = 2.0;
+  config.depth_samples = 64;
+
+  config.threads = 1;
+  const DepthMap single = estimateDepth(views[reference], neighbours, config);
+  config.threads = 4;
+  const DepthMap many = estimateDepth(views[reference], neighbours, config);
+
+  ASSERT_FALSE(single.empty());
+  ASSERT_EQ(single.width, many.width);
+  ASSERT_EQ(single.height, many.height);
+  int differing = 0;
+  for (int y = 0; y < single.height; ++y) {
+    for (int x = 0; x < single.width; ++x) {
+      if (single.at(x, y) != many.at(x, y)) ++differing;
+    }
+  }
+  EXPECT_EQ(differing, 0) << differing << " pixels differ";
+  EXPECT_EQ(single.confidence, many.confidence);
+}
+
 TEST(MvsTest, RecoversDepthInsideARoom) {
   const SyntheticScene scene = SyntheticScene::room();
   // Looking at a corner from two positions a little apart, which is what a

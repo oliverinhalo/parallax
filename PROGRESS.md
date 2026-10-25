@@ -728,3 +728,30 @@ Three things the real run shows that are not bugs but are not good either:
 - **2.09 m² of surface over a 5.36 m extent.** The mesh is fragments of a facade rather than a
   facade. Sixteen frames of estimated depth at the coarsest preset is not much to ask for, but
   nothing yet says how much of that is the preset and how much is the geometry.
+
+---
+
+## Phase 20 — The depth sweep was using one core
+
+### What changed
+
+Depth estimation was 97% of a real run. The engine had no threading anywhere in it, and a plane
+sweep is the ideal case for it: each pixel's answer depends on the images and on nothing another
+pixel computed. Row blocks across the cores, capped at six for the phone's sake (ADR-019).
+
+670 s to 138 s on the sixteen real photographs, with the voxel, triangle and point counts
+bit-identical. The whole native suite also went from 164 s to 131 s.
+
+### Bugs this phase's tests caught
+
+None -- which is the point of the equality test. A parallelisation does not fail by crashing; it
+fails by computing a slightly different answer on some runs, which is far harder to notice than
+a crash and much worse than a slow correct one. `GivesTheSameDepthMapWhateverTheThreadCount`
+compares the one-thread and four-thread maps pixel for pixel and confidence for confidence.
+
+### Verification boundaries
+
+Threading is not the fix the cost needs. Coarse-to-fine would cut the work rather than spread
+it, and remains undone. The cap is also a fixed number on a device whose thermal state the
+capture stage already reads and this does not.
+

@@ -1,5 +1,7 @@
 #include "parallax/depth/MultiViewStereo.h"
 
+#include "parallax/core/Parallel.h"
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -284,7 +286,11 @@ DepthMap estimateDepth(const MvsView& reference, const std::vector<MvsView>& nei
   raw.confidence.assign(
       static_cast<size_t>(reference_image.width) * reference_image.height, 0);
 
-  for (int y = 0; y < reference_image.height; ++y) {
+  // Row blocks across the cores. Each pixel writes only its own entry of `raw`, reads only
+  // the images, and depends on no other pixel's answer.
+  parallelFor(static_cast<size_t>(reference_image.height), config.threads,
+              [&](size_t row_begin, size_t row_end) {
+  for (int y = static_cast<int>(row_begin); y < static_cast<int>(row_end); ++y) {
     for (int x = 0; x < reference_image.width; ++x) {
       const ReferencePatch patch = buildPatch(reference_image, x, y, radius);
       if (!patch.valid) continue;
@@ -321,6 +327,7 @@ DepthMap estimateDepth(const MvsView& reference, const std::vector<MvsView>& nei
       }
     }
   }
+  });
 
   // ---- geometric consistency -------------------------------------------
   //
@@ -336,7 +343,9 @@ DepthMap estimateDepth(const MvsView& reference, const std::vector<MvsView>& nei
   // each neighbour individually, counted per view.
   DepthMap filtered(raw.width, raw.height);
   filtered.confidence.assign(raw.confidence.size(), 0);
-  for (int y = 0; y < raw.height; ++y) {
+  parallelFor(static_cast<size_t>(raw.height), config.threads,
+              [&](size_t row_begin, size_t row_end) {
+  for (int y = static_cast<int>(row_begin); y < static_cast<int>(row_end); ++y) {
     for (int x = 0; x < raw.width; ++x) {
       const float depth = raw.at(x, y);
       if (depth <= 0.f) continue;
@@ -358,6 +367,7 @@ DepthMap estimateDepth(const MvsView& reference, const std::vector<MvsView>& nei
       }
     }
   }
+  });
 
   // ---- median smoothing -------------------------------------------------
   //

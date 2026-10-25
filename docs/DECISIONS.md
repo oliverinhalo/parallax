@@ -525,3 +525,39 @@ stops rather than carrying on in an unknown state, but a bug in the drawing path
 than it should be. The alternative is an app that vanishes, which is worse for the person
 holding it and no better for the person fixing it.
 
+---
+
+## ADR-019 — The depth sweep runs on several cores, capped at six
+
+**Status:** accepted
+
+**Context.** The engine was single-threaded throughout. That went unnoticed until the first real
+photographs went through it: depth estimation was 97% of the run, forty seconds a frame on
+1,600 px frames at the coarsest preset, on a four-core machine with three cores idle. The
+pipeline is a background job on a phone that the user is not watching, but a scan that takes
+twenty minutes is one they stop trusting.
+
+**Decision.** A `parallelFor` over row blocks, used by the two pixel loops in the plane sweep.
+Nothing else in the engine is threaded. The thread count asks the hardware and is capped at six.
+
+**Why only the sweep.** It is where the time is, and it is the one place with no shared state:
+each pixel's depth depends on the images and on nothing another pixel computed. Fusion,
+meshing and texturing are each under three seconds on the same run, so threading them would add
+races to guard against for no measured gain.
+
+**Why row blocks rather than a work queue.** The cost per pixel is near-uniform, so a queue's
+synchronisation would be a large fraction of the saving.
+
+**What it measures.** 670 s to 138 s on sixteen real photographs, with the voxel, triangle and
+point counts bit-identical. A test asserts the one-thread and four-thread depth maps are equal,
+because the failure mode of a parallelisation is not slowness but a map that differs slightly
+between runs, which is far harder to notice than a crash.
+
+**What it costs.** Battery and heat, on a device that is already thermally limited while
+scanning -- which is why the cap is six rather than the core count, and why it is a number
+rather than "all of them". It is the wrong lever, though: the right fix is coarse-to-fine, which
+would cut the work rather than spread it, and that remains undone. Threading made a bad
+algorithm bearable, and an ADR that claimed otherwise would be hiding the real cost. There is
+also no per-device thread budget yet: the cap is the same on a phone that is hot and one that is
+cold, where the capture stage already throttles itself on thermal state and this does not.
+

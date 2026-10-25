@@ -52,6 +52,8 @@ struct MvsConfig {
   /// anyway, and the cost is quadratic in resolution, so half resolution is
   /// the default.
   int downscale = 2;
+  /// Worker threads for the sweep; zero asks the hardware, capped internally.
+  int threads = 0;
 };
 
 /// One view's contribution: the image, its pose and its intrinsics.
