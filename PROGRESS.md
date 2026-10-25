@@ -663,3 +663,34 @@ Neither fix has been seen working on a device from here. The pose conversion is 
 construction and by its effect on a known point; whether a real scan now produces a model
 depends on the rest of the chain being right, which only a device can say.
 
+---
+
+## Phase 19 — Real photographs
+
+The synthetic captures in the tests are rendered by the same code that consumes them, in the
+same conventions, with no lens distortion, no JPEG artefacts and no camera that was ever moved
+by a person. They had passed throughout every failure a device reported. So the engine now has
+a tool, `parallax_run`, that takes a folder of photographs and runs the pipeline over them, and
+the first real dataset put through it found four bugs in one afternoon.
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| Eleven photographs of a building registered three frames, then blamed overlap | Matches went into track building on their raw count alone, with no geometric verification. Repeated detail -- the windows of a facade, the tiles of a floor -- produces matches that pass the ratio test, pass cross-checking, and are wrong; those fuse distinct world points into one track, so a frame is offered two hundred correspondences to points that are in neither place. The two-view inlier mask was already being computed to choose the initialisation pair, and thrown away. |
+| PnP returned zero inliers on every frame of a facade | The DLT behind the RANSAC is linear and needs points that are not coplanar, and a facade is a plane. The fallback existed for this but seeded only from the nearest placed frame, which is a usable guess for an adjacent frame and 600 px out three frames away. Every placed pose is tried now. |
+| Twenty-four consecutive photographs registered four frames | Features were detected at the source resolution. The descriptor samples a fixed-size patch, so on a seven-megapixel photograph it spans a few bricks' worth of sensor noise. Detection is normalised to a 1,600 px long side -- which is roughly what the app's own capture writes, and therefore what the rest of the tuning was chosen against. |
+| A frame whose PnP failed once was excluded for good | Failing once is normal: the first registrations have only the initial pair's points, so a frame seeing another part of the scene has nothing to match. Progress now clears the failures. |
+| A capture of a plain wall would have been rejected outright | Mine, from this phase: the new "no two frames could be related" check did not exclude captures that came with device poses, where the pairs refine a placement rather than create it. A scan ARCore had tracked perfectly would have failed at pose refinement. Caught by an existing test. |
+
+Registration on the wide-baseline set went from 3 of 11 to 6 of 11, with the mean reprojection
+error falling from 0.76 px to 0.61 px.
+
+### Verification boundaries
+
+Six of eleven is not success. That dataset is a hard wide-baseline set -- the photographs are
+metres apart -- and ADR-003 records the limitation it runs into: steered BRIEF is not SIFT.
+The app's own capture takes frames centimetres apart, which is the opposite regime, and the
+Import path is the only one that uses structure from motion at all. A room scan supplies device
+poses and never touches it.
+

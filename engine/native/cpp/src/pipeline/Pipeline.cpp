@@ -37,6 +37,31 @@ constexpr int kMvsSamples = 48;
 constexpr int kMvsFastDownscale = 3;
 constexpr int kMvsFastSamples = 32;
 
+/// How much of a pose-less capture has to be placed for the rest of the pipeline to work.
+///
+/// Below this the registered frames are a fragment of what the user photographed: depth
+/// estimation has too few neighbours to correlate against, fusion sees one side of one thing,
+/// and the run fails two stages after the cause with a message about overlap and texture.
+/// Six tenths is what the real-photograph datasets here need to produce a closed surface.
+constexpr double kMinRegisteredFraction = 0.6;
+
+/// Matches a pair must keep after geometric verification to be worth building tracks from.
+///
+/// Before verification the same number counted raw matches, most of which could be wrong. A
+/// verified match is one a single relative pose explains, so twenty of them is real overlap.
+constexpr size_t kMinVerifiedPairMatches = 15;
+
+/// Raw matches a pair needs before it is worth verifying. Not a quality judgement: the two-view
+/// geometry makes that, and anything it can explain with fifteen matches is real overlap.
+constexpr size_t kMinRawPairMatches = 18;
+
+/// Long side, in pixels, that features are detected at whatever the source resolution.
+///
+/// About what the app's own capture writes, which is the resolution the rest of the tuning --
+/// the FAST threshold, the descriptor patch, the match distances -- was chosen against. An
+/// imported photograph can be any size, and matching fell apart on the large ones.
+constexpr int kFeatureLongSide = 1600;
+
 /// The fewest frames that can produce a surface rather than merely triangulate.
 ///
 /// Two views are enough to recover depth along one line of sight, which is why the arithmetic
@@ -602,8 +627,35 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
     if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
     ColorBuffer image;
     if (!loadImage(frames[keyframes[i]], &image)) continue;
-    const GrayBuffer gray = toGray(image);
+
+    // Features are found at a fixed resolution, whatever the camera's.
+    //
+    // The descriptor samples a fixed-size patch around each corner, so what it describes
+    // depends entirely on how much of the scene a pixel covers. On a frame the app captured
+    // that is about 2,000 px across and the patch spans real structure; on a twelve-megapixel
+    // photograph from a gallery it spans a few bricks' worth of noise, and the descriptors
+    // stop matching. Twenty-four consecutive photographs of a building registered four frames
+    // because of this -- not for want of overlap, which is what the failure said.
+    //
+    // Downscaled with a box filter rather than point-sampled: point sampling keeps the sensor
+    // noise at full amplitude, which is the thing the detector then finds corners in.
+    const int long_side = std::max(image.width, image.height);
+    double feature_scale = 1.0;
+    const GrayBuffer gray = [&] {
+      if (long_side <= kFeatureLongSide) return toGray(image);
+      const int target_width = image.width >= image.height
+                                   ? kFeatureLongSide
+                                   : std::max(1, image.width * kFeatureLongSide / image.height);
+      const ColorBuffer reduced = downscaleToWidth(image, target_width);
+      feature_scale = static_cast<double>(image.width) / std::max(1, reduced.width);
+      return toGray(reduced);
+    }();
     features[i] = detectAndDescribe(gray.view(), feature_params);
+    // Back to full-resolution coordinates, so the intrinsics, the matches and everything
+    // downstream stay in the one frame of reference.
+    if (feature_scale != 1.0) {
+      for (Keypoint& keypoint : features[i].keypoints) keypoint.pt *= feature_scale;
+    }
     intrinsics[i] = frames[keyframes[i]].intrinsics.width == image.width
                         ? frames[keyframes[i]].intrinsics
                         : frames[keyframes[i]].intrinsics.scaledTo(image.width, image.height);
@@ -620,6 +672,9 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
   struct PairMatches {
     int a, b;
     std::vector<Match> matches;
+    /// Two-view geometry over this pair's matches, computed once and kept.
+    TwoViewGeometry geometry;
+    bool verified = false;
   };
   std::vector<PairMatches> pairs;
   const int window = config.has_device_poses ? 3 : 6;
@@ -641,10 +696,11 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
         match_params.ratio = 0.88;
       }
       pair.matches = matchFeatures(features[i], features[j], match_params);
-      // A wider window produces genuinely weaker distant pairs; require more evidence from
-      // them than from adjacent ones.
-      const size_t required = offset <= 2 ? 20u : 35u;
-      if (pair.matches.size() >= required) pairs.push_back(std::move(pair));
+      // A low bar, because this is only about not wasting a verification on a pair with
+      // nothing in it. Deciding which pairs are real used to happen here, on the raw match
+      // count, and it threw away pairs that would have verified while keeping pairs that were
+      // mostly false matches from repeated texture. The geometry below decides now.
+      if (pair.matches.size() >= kMinRawPairMatches) pairs.push_back(std::move(pair));
     }
     if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
   }
@@ -654,9 +710,69 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
     pair.a = 0;
     pair.b = static_cast<int>(keyframes.size() - 1);
     pair.matches = matchFeatures(features.front(), features.back());
-    if (pair.matches.size() >= 20) pairs.push_back(std::move(pair));
+    if (pair.matches.size() >= kMinRawPairMatches) pairs.push_back(std::move(pair));
   }
   report(progress, Stage::PoseRefinement, 0.6, "Matching frames");
+
+  // ---- geometric verification -------------------------------------------
+  //
+  // Every pair's matches are cut down to the ones a single relative pose explains, and pairs
+  // that no pose explains are dropped. The descriptor matcher cannot tell a real
+  // correspondence from a plausible one, and the things people photograph are full of repeated
+  // detail -- the windows of a facade, the tiles of a floor, the slats of a blind. Those
+  // matches pass the ratio test, pass cross-checking, and are wrong.
+  //
+  // Leaving them in was the reason registration stalled. They fuse distinct world points into
+  // one track, so the triangulated point is in neither place; a frame is then offered two
+  // hundred correspondences to points that are not where they claim, and no pose fits more
+  // than a handful. Eleven real photographs of a building registered three frames, and the
+  // failure two stages later blamed overlap -- on a set with 3,636 tracks.
+  //
+  // The geometry was already being computed to choose the initialisation pair, and its inlier
+  // mask thrown away. This costs nothing new.
+  {
+    std::vector<PairMatches> verified;
+    verified.reserve(pairs.size());
+    int dropped_matches = 0;
+    for (PairMatches& pair : pairs) {
+      if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
+      std::vector<PointPair> correspondences;
+      correspondences.reserve(pair.matches.size());
+      for (const Match& match : pair.matches) {
+        correspondences.push_back(PointPair{features[pair.a].keypoints[match.query].pt,
+                                            features[pair.b].keypoints[match.train].pt});
+      }
+      pair.geometry = estimateTwoView(correspondences, intrinsics[pair.a], intrinsics[pair.b]);
+      pair.verified = pair.geometry.success;
+      if (!pair.verified) {
+        dropped_matches += static_cast<int>(pair.matches.size());
+        continue;
+      }
+      std::vector<Match> kept;
+      kept.reserve(pair.geometry.inlier_count);
+      for (size_t m = 0; m < pair.matches.size(); ++m) {
+        if (m < pair.geometry.inliers.size() && pair.geometry.inliers[m]) {
+          kept.push_back(pair.matches[m]);
+        }
+      }
+      dropped_matches += static_cast<int>(pair.matches.size() - kept.size());
+      pair.matches = std::move(kept);
+      // The same evidence threshold as before verification, now applied to matches that mean
+      // something: a pair whose inliers are this few is a pair with no reliable overlap.
+      if (pair.matches.size() >= kMinVerifiedPairMatches) verified.push_back(std::move(pair));
+    }
+    pairs = std::move(verified);
+    report(progress, Stage::PoseRefinement, 0.62, "Checking matches");
+  }
+  // Fatal only without device poses. With them the frames are already placed and the pairs
+  // are there to refine the placement, so having none means there is nothing to refine -- not
+  // that the capture is unusable. A scan of a plain wall can legitimately verify no pair at
+  // all, and failing it here would reject a capture the device had tracked perfectly.
+  if (pairs.empty() && !config.has_device_poses) {
+    return StageOutcome{false, false,
+                        "no two frames could be related to each other; the photographs may be"
+                        " of different things, or taken from too far apart"};
+  }
 
   // Seed poses. With device poses we refine them; without, we initialise from two-view geometry
   // and grow by PnP.
@@ -686,22 +802,13 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
     TwoViewGeometry best_geometry;
     for (size_t p = 0; p < pairs.size(); ++p) {
       const PairMatches& pair = pairs[p];
-      std::vector<PointPair> correspondences;
-      correspondences.reserve(pair.matches.size());
-      for (const Match& match : pair.matches) {
-        correspondences.push_back(PointPair{features[pair.a].keypoints[match.query].pt,
-                                            features[pair.b].keypoints[match.train].pt});
-      }
-      const TwoViewGeometry geometry =
-          estimateTwoView(correspondences, intrinsics[pair.a], intrinsics[pair.b]);
-      if (!geometry.success) continue;
-      if (geometry.planarity > 0.85) continue;  // degenerate for pose recovery
-      if (geometry.inlier_count > best_inliers) {
-        best_inliers = geometry.inlier_count;
+      if (!pair.verified) continue;
+      if (pair.geometry.planarity > 0.85) continue;  // degenerate for pose recovery
+      if (pair.geometry.inlier_count > best_inliers) {
+        best_inliers = pair.geometry.inlier_count;
         best_pair = static_cast<int>(p);
-        best_geometry = geometry;
+        best_geometry = pair.geometry;
       }
-      if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
     }
     if (best_pair < 0) {
       return StageOutcome{false, false,
@@ -855,7 +962,12 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
     };
     retriangulate();
 
-    for (size_t round = 0; round < keyframes.size(); ++round) {
+    // Bounded by attempts rather than by rounds, because a frame that failed is allowed back.
+    // Four tries per frame is enough for the set to grow around a hard one and come back to it,
+    // and is a ceiling on the work rather than a target: progress clears the failures, so a
+    // capture that registers cleanly makes exactly one attempt per frame.
+    const size_t max_attempts = keyframes.size() * 4;
+    for (size_t attempt = 0; attempt < max_attempts; ++attempt) {
       if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
 
       // Gather candidate correspondences for every unregistered frame.
@@ -886,59 +998,68 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
       pnp_options.max_iterations = 2500;
       PnpResult pnp = pnpRansac(best_correspondences, intrinsics[best_frame], pnp_options);
 
-      // Sequential fallback.
+      // Non-linear fallback, seeded from every frame already placed.
       //
-      // RANSAC over the DLT still struggles when the triangulated points are nearly all on one
-      // surface, because non-coplanar minimal samples are rare. A capture is a *sequence*,
-      // though: the nearest already-registered frame is a good initial guess, so seeding from
-      // it and refining under a Huber loss recovers the pose without ever solving a DLT. This
-      // is what makes the import path work on scans dominated by a floor or a wall.
+      // The DLT behind the RANSAC is a linear formulation and needs points that are not
+      // coplanar. A great deal of what people photograph is: a wall, a facade, a floor, a
+      // table top. On eleven real photographs of a building the RANSAC returned zero inliers
+      // on every single frame, because every minimal sample it drew was degenerate -- while
+      // each of those frames had two hundred good correspondences sitting there.
+      //
+      // Gauss-Newton on the reprojection error has no such degeneracy; it needs a starting
+      // pose. Seeding from the *nearest* placed frame worked only for a frame adjacent to one,
+      // and the camera moves between photographs: three frames away the seed was wrong by
+      // enough that the refinement converged to a pose 600 px out. Every placed pose is tried
+      // instead and the one with the most inliers wins, which costs a Gauss-Newton per placed
+      // frame -- nothing next to the RANSAC it is replacing.
       if (!pnp.success || pnp.inlier_count < 8) {
-        int nearest = -1;
-        int best_distance = std::numeric_limits<int>::max();
+        const auto scorePose = [&](const Pose& pose, double* inlier_rmse) {
+          int inliers = 0;
+          double sum_sq = 0.0;
+          for (const PointCorrespondence& c : best_correspondences) {
+            Vec2 projected;
+            if (!intrinsics[best_frame].project(pose * c.world, &projected)) continue;
+            const double error = (projected - c.pixel).norm();
+            if (error > pnp_options.inlier_threshold) continue;
+            ++inliers;
+            sum_sq += error * error;
+          }
+          // Measured over the inliers only. The RMSE over everything is dominated by the
+          // outliers the Huber loss deliberately ignored, so gating on it rejects good poses;
+          // gating on the inlier count alone accepts poses that fit a subset by coincidence.
+          *inlier_rmse = inliers > 0 ? std::sqrt(sum_sq / inliers) : 1e9;
+          return inliers;
+        };
+
+        Pose best_pose;
+        int best_inliers = 0;
+        double best_rmse = 1e9;
         for (size_t j = 0; j < keyframes.size(); ++j) {
           if (!registered[j]) continue;
-          const int distance = std::abs(static_cast<int>(j) - best_frame);
-          if (distance < best_distance) {
-            best_distance = distance;
-            nearest = static_cast<int>(j);
+          Pose seeded = poses[j];
+          double unused_rmse = 0.0;
+          if (!refinePoseGaussNewton(best_correspondences, intrinsics[best_frame], &seeded, 40,
+                                     pnp_options.inlier_threshold, &unused_rmse)) {
+            continue;
+          }
+          double inlier_rmse = 1e9;
+          const int inliers = scorePose(seeded, &inlier_rmse);
+          if (inliers > best_inliers) {
+            best_inliers = inliers;
+            best_rmse = inlier_rmse;
+            best_pose = seeded;
           }
         }
-        if (nearest >= 0) {
-          Pose seeded = poses[nearest];
-          double rmse = 0.0;
-          if (refinePoseGaussNewton(best_correspondences, intrinsics[best_frame], &seeded, 40,
-                                    pnp_options.inlier_threshold, &rmse)) {
-            int inliers = 0;
-            for (const PointCorrespondence& c : best_correspondences) {
-              Vec2 projected;
-              if (!intrinsics[best_frame].project(seeded * c.world, &projected)) continue;
-              if ((projected - c.pixel).norm() <= pnp_options.inlier_threshold) ++inliers;
-            }
-            // Require both an absolute count and a decent share, so a pose that merely fits a
-            // handful of points is not accepted.
-            // Measure the RMSE over the *inliers* only. The raw RMSE over all
-            // correspondences is dominated by the outliers the Huber loss deliberately
-            // ignored, so gating on it would reject perfectly good poses -- and gating on the
-            // inlier count alone accepts poses that fit a subset by coincidence.
-            double inlier_sum_sq = 0.0;
-            for (const PointCorrespondence& c : best_correspondences) {
-              Vec2 projected;
-              if (!intrinsics[best_frame].project(seeded * c.world, &projected)) continue;
-              const double error = (projected - c.pixel).norm();
-              if (error <= pnp_options.inlier_threshold) inlier_sum_sq += error * error;
-            }
-            const double inlier_rmse =
-                inliers > 0 ? std::sqrt(inlier_sum_sq / inliers) : 1e9;
-            if (inliers >= 12 &&
-                inliers * 100 >= static_cast<int>(best_correspondences.size()) * 35 &&
-                inlier_rmse <= pnp_options.inlier_threshold) {
-              pnp.pose = seeded;
-              pnp.inlier_count = inliers;
-              pnp.rmse_px = inlier_rmse;
-              pnp.success = true;
-            }
-          }
+
+        // Both an absolute count and a share of what was offered, so a pose that merely fits a
+        // handful of points is not accepted.
+        if (best_inliers >= 12 &&
+            best_inliers * 100 >= static_cast<int>(best_correspondences.size()) * 35 &&
+            best_rmse <= pnp_options.inlier_threshold) {
+          pnp.pose = best_pose;
+          pnp.inlier_count = best_inliers;
+          pnp.rmse_px = best_rmse;
+          pnp.success = true;
         }
       }
 
@@ -949,6 +1070,15 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
       poses[best_frame] = pnp.pose;
       registered[best_frame] = 1;
       retriangulate();
+      // A frame that failed is given another chance now that the registered set has grown.
+      //
+      // Without this, failing once was permanent, and failing once is normal: the first few
+      // registrations have only the initial pair's points to work from, so a frame that sees a
+      // different part of the scene has almost nothing to match against and is excluded before
+      // the points it needs exist. On eleven real photographs of a building that left three
+      // registered and eight locked out, and the run died two stages later complaining about
+      // overlap -- on a set with 46 matched pairs and 3,636 tracks.
+      std::fill(attempted.begin(), attempted.end(), 0);
 
       // Local bundle adjustment after every registration.
       //
@@ -1004,7 +1134,7 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
       }
 
       report(progress, Stage::PoseRefinement,
-             0.70 + 0.08 * static_cast<double>(round + 1) / keyframes.size(),
+             0.70 + 0.08 * static_cast<double>(attempt + 1) / max_attempts,
              "Registering frames");
     }
   }
@@ -1097,9 +1227,29 @@ StageOutcome Pipeline::Impl::runPoseRefinement(const ProgressCallback& progress,
   summary.mean_reprojection_error_px = rmse;
   summary.scale_factor = scale_factor;
   saveSummary();
-  return StageOutcome{true, false,
-                      "registered " + std::to_string(registered_count) + " frames at " +
-                          std::to_string(rmse) + " px"};
+
+  // The counts are in the message, not only the registered total. A run that places three
+  // photographs out of eleven goes on to fail two stages later for want of overlap, and
+  // "registered 3 frames" was the only place that was visible -- as a success.
+  char message[256];
+  std::snprintf(message, sizeof(message),
+                "registered %d of %zu frames at %.2f px, from %zu matched pairs and %zu tracks",
+                registered_count, keyframes.size(), rmse, pairs.size(), tracks.size());
+
+  // Too few placed to reconstruct from, said here rather than discovered downstream. The
+  // threshold is a fraction rather than a count because the useful question is whether most of
+  // what the user captured made it in, and the mode's own frame budget sets the scale.
+  const double placed = keyframes.empty()
+                            ? 0.0
+                            : static_cast<double>(registered_count) / keyframes.size();
+  if (!config.has_device_poses && placed < kMinRegisteredFraction) {
+    return StageOutcome{
+        false, false,
+        std::string(message) +
+            "; too few to reconstruct from. The photographs need more overlap: each one should"
+            " share about two thirds of its view with the one before it."};
+  }
+  return StageOutcome{true, false, message};
 }
 
 StageOutcome Pipeline::Impl::runDepth(const ProgressCallback& progress,

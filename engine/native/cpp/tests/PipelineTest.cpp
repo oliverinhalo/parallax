@@ -506,10 +506,13 @@ TEST(Pipeline, FusionSaysWhenNoKeyframeHadADepthMap) {
 
 /// With no poses *and* no depth there is nothing to triangulate from, and the
 /// failure has to say so rather than producing an empty model.
+/// No baseline at all, with the poses supplied.
+///
+/// The poses are given, so the frames are placed and the run reaches depth -- where there is
+/// nothing to triangulate, because every view is from the same point. The message has to name
+/// depth rather than producing an empty model.
 TEST(Pipeline, FailsWithAClearMessageWhenDepthCannotBeEstimated) {
   SyntheticCapture capture;
-  // Enough frames to get past ingest, but all from almost the same position: there is no
-  // baseline, so no depth is recoverable from them however good the images are.
   {
     SyntheticScene scene = SyntheticScene::objectOnTable();
     const CameraIntrinsics intrinsics = phoneIntrinsics(160, 120);
@@ -519,13 +522,43 @@ TEST(Pipeline, FailsWithAClearMessageWhenDepthCannotBeEstimated) {
     }
     capture.writeCapture(scene, intrinsics, poses, /*with_poses=*/true, /*with_depth=*/false);
   }
-  Pipeline pipeline(objectConfig(capture.path()));
+  PipelineConfig config = objectConfig(capture.path());
+  config.has_depth_maps = false;
+  Pipeline pipeline(config);
   ASSERT_TRUE(pipeline.runStage(Stage::Ingest, nullptr, nullptr).success);
-  pipeline.runStage(Stage::PoseRefinement, nullptr, nullptr);
+  ASSERT_TRUE(pipeline.runStage(Stage::PoseRefinement, nullptr, nullptr).success);
 
   const StageOutcome outcome = pipeline.runStage(Stage::Depth, nullptr, nullptr);
   EXPECT_FALSE(outcome.success);
   EXPECT_NE(outcome.message.find("depth"), std::string::npos) << outcome.message;
+}
+
+/// And without poses, the same capture fails a stage earlier, where the cause is.
+///
+/// Views from one point cannot be placed relative to each other at all, so pose refinement is
+/// where that has to be said. It used to register a handful of frames, report success, and
+/// leave depth to explain a failure it had inherited.
+TEST(Pipeline, FailsAtPoseRefinementWhenTheFramesCannotBePlaced) {
+  SyntheticCapture capture;
+  {
+    SyntheticScene scene = SyntheticScene::objectOnTable();
+    const CameraIntrinsics intrinsics = phoneIntrinsics(160, 120);
+    std::vector<Pose> poses;
+    for (int i = 0; i < 10; ++i) {
+      poses.push_back(SyntheticScene::lookAt(Vec3(0, 0.4, -1.0), Vec3(0, 0.3, 0)));
+    }
+    capture.writeCapture(scene, intrinsics, poses, /*with_poses=*/false, /*with_depth=*/false);
+  }
+  PipelineConfig config = objectConfig(capture.path());
+  config.has_device_poses = false;
+  config.has_depth_maps = false;
+  Pipeline pipeline(config);
+  ASSERT_TRUE(pipeline.runStage(Stage::Ingest, nullptr, nullptr).success);
+
+  const StageOutcome outcome = pipeline.runStage(Stage::PoseRefinement, nullptr, nullptr);
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_NE(outcome.message.find("frames"), std::string::npos) << outcome.message;
 }
 
 /// A handful of photos is refused where the number still means something.
