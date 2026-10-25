@@ -686,11 +686,45 @@ the first real dataset put through it found four bugs in one afternoon.
 Registration on the wide-baseline set went from 3 of 11 to 6 of 11, with the mean reprojection
 error falling from 0.76 px to 0.61 px.
 
+### The device-pose path, end to end on real photographs
+
+Which is the one a room scan takes, and the one all three device failures were on. Sixteen real
+photographs at 1,600 px -- about what the app's own capture writes -- with the camera poses and
+intrinsics from the dataset's own reconstruction, which are in the engine's convention:
+
+| Stage | Time | Result |
+| --- | --- | --- |
+| ingest | 1.9s | 16 keyframes |
+| pose refinement | 13.0s | 16 of 16 registered at 0.47 px, 33 pairs, 731 tracks |
+| depth | 649.5s | 16 of 16 estimated from the images |
+| fusion | 2.5s | 254,640 voxels observed |
+| meshing | 0.6s | 22,207 triangles |
+| mesh cleanup | 0.2s | 20,228 triangles |
+| texturing | 2.1s | 14,484 triangles textured |
+| point cloud | 0.0s | 4,130 points |
+| splat training | 835s total | 3,945 gaussians, CPU backend |
+| room analysis | 0.1s | no floor plan could be measured |
+| finalise | 0.0s | `model.glb`, 1.4 MB |
+
+Every stage runs and a textured model comes out. That had never been true of anything but a
+synthetic render.
+
 ### Verification boundaries
 
-Six of eleven is not success. That dataset is a hard wide-baseline set -- the photographs are
-metres apart -- and ADR-003 records the limitation it runs into: steered BRIEF is not SIFT.
-The app's own capture takes frames centimetres apart, which is the opposite regime, and the
-Import path is the only one that uses structure from motion at all. A room scan supplies device
-poses and never touches it.
+Six of eleven on the wide-baseline set is not success. Those photographs are metres apart, and
+ADR-003 records the limitation: steered BRIEF is not SIFT. The app's own capture takes frames
+centimetres apart, the opposite regime, and Import is the only path that uses structure from
+motion at all -- a room scan supplies device poses and never touches it.
 
+Three things the real run shows that are not bugs but are not good either:
+
+- **Depth estimation is 40 seconds a frame** at the *fast* preset, on 1,600 px frames, on a
+  desktop. It is 97% of the run. The microbenchmarks already said multi-view stereo was two
+  orders of magnitude more expensive per megapixel than anything else; this is what that means
+  in practice, and on a phone it is worse.
+- **The floor-plan path is still unvalidated on real data.** The dataset is a building
+  exterior, so the analysis correctly declined for want of a floor and a ceiling. Declining
+  correctly is worth knowing; measuring correctly is not yet known.
+- **2.09 m² of surface over a 5.36 m extent.** The mesh is fragments of a facade rather than a
+  facade. Sixteen frames of estimated depth at the coarsest preset is not much to ask for, but
+  nothing yet says how much of that is the preset and how much is the geometry.
