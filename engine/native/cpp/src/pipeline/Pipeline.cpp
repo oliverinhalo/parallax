@@ -378,10 +378,24 @@ struct Pipeline::Impl {
     return decodePng(bytes, out);
   }
 
+  /**
+   * Read a frame's depth map, measured or estimated.
+   *
+   * The fallback is not belt and braces. The depth stage writes the maps it estimates to
+   * `depth/` under a name derived from the frame index, and records them on the in-memory
+   * frame record -- but the manifest on disk is the app's record of what the camera captured
+   * and never learns about them. So any later stage reached in a fresh process, which is every
+   * resume and every retry, loaded the manifest, found no depth file, and fused nothing. The
+   * file is on disk and its name is a function of the index, so the name is enough: looking
+   * for it makes the depth stage's work survive the process that did it.
+   */
   bool loadDepth(const FrameRecord& frame, DepthMap* out) const {
-    if (frame.depth_file.empty()) return false;
-    const fs::path path = projectDir() / "depth" / frame.depth_file;
-    return readDepthRaw(path.string(), out);
+    if (!frame.depth_file.empty()) {
+      const fs::path named = projectDir() / "depth" / frame.depth_file;
+      if (readDepthRaw(named.string(), out)) return true;
+    }
+    const fs::path estimated = projectDir() / "depth" / depthFileNameFor(frame.index);
+    return readDepthRaw(estimated.string(), out);
   }
 
   // ---- the stages -------------------------------------------------------
@@ -1257,11 +1271,18 @@ StageOutcome Pipeline::Impl::runFusion(const ProgressCallback& progress,
   tsdf.max_blocks = std::max<size_t>(2048, config.memory_budget_bytes / bytes_per_block);
   TsdfVolume volume(tsdf);
 
+  // Counted so a failure can say which half of the stage had nothing to work with. Without
+  // these, "fusion produced nothing" covers both no depth at all and depth that did not line
+  // up with the poses, and those have different causes and different things to try.
+  size_t frames_with_depth = 0;
+  size_t frames_integrated = 0;
+
   for (size_t i = 0; i < keyframes.size(); ++i) {
     if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
     const FrameRecord& frame = frames[keyframes[i]];
     DepthMap depth;
     if (!loadDepth(frame, &depth) || depth.empty()) continue;
+    ++frames_with_depth;
 
     ColorBuffer color;
     loadImage(frame, &color);
@@ -1285,13 +1306,27 @@ StageOutcome Pipeline::Impl::runFusion(const ProgressCallback& progress,
       color = std::move(resized);
     }
     volume.integrate(depth, color, k, poses[i]);
+    ++frames_integrated;
     report(progress, Stage::Fusion, static_cast<double>(i + 1) / keyframes.size(),
            "Fusing frame " + std::to_string(i + 1) + " of " + std::to_string(keyframes.size()));
   }
 
+  if (keyframes.empty()) {
+    return StageOutcome{false, false, "there are no keyframes to fuse"};
+  }
+  if (frames_with_depth == 0) {
+    return StageOutcome{false, false,
+                        "none of the " + std::to_string(keyframes.size()) +
+                            " keyframes had a depth map, so there was nothing to fuse"};
+  }
   if (volume.stats().observed_voxels == 0) {
     return StageOutcome{false, false,
-                        "fusion produced nothing; the depth maps and poses may disagree"};
+                        "no surface was found in " + std::to_string(frames_integrated) +
+                            " of " + std::to_string(keyframes.size()) +
+                            " keyframes; the depth maps and camera poses may disagree, or the"
+                            " subject may be beyond the " +
+                            std::to_string(static_cast<int>(tsdf.max_depth * 100)) +
+                            " cm integration range"};
   }
   // Surface the budget exhaustion rather than letting it show up as a mysteriously incomplete
   // model three stages later.

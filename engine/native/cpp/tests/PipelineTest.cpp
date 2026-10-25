@@ -132,6 +132,14 @@ class SyntheticCapture {
     return false;
   }
 
+  /// Delete every depth map, leaving the manifest and checkpoints alone.
+  void removeDepthFiles() const {
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(dir_ / "depth", ec)) {
+      fs::remove(entry.path(), ec);
+    }
+  }
+
   bool hasCheckpoint(const std::string& name) const {
     std::error_code ec;
     return fs::exists(dir_ / "checkpoints" / name, ec);
@@ -447,6 +455,53 @@ TEST(Pipeline, RunsToCompletionOnEstimatedDepth) {
   // so the model is in metres just as a sensor-depth scan would be.
   EXPECT_GT(summary.bounds.diagonal(), 0.15);
   EXPECT_LT(summary.bounds.diagonal(), 6.0);
+}
+
+/// Depth estimated in one process, fused in another.
+///
+/// The estimates are written to `depth/` and recorded on the in-memory frame records, but the
+/// manifest on disk is the app's record of the capture and never learns about them. So every
+/// resume and every retry -- which is a fresh process reading that manifest -- used to reach
+/// fusion with no depth at all and fail, having written perfectly good depth maps a stage
+/// earlier. The existing resume test missed it by using a capture that had sensor depth.
+TEST(Pipeline, FusesDepthEstimatedBeforeTheProcessWasRestarted) {
+  SyntheticCapture capture;
+  capture.writeObjectCapture(16, 160, /*with_poses=*/true, /*with_depth=*/false);
+  PipelineConfig config = objectConfig(capture.path());
+
+  {
+    Pipeline first(config);
+    ASSERT_TRUE(first.runStage(Stage::Ingest, nullptr, nullptr).success);
+    ASSERT_TRUE(first.runStage(Stage::PoseRefinement, nullptr, nullptr).success);
+    const StageOutcome depth = first.runStage(Stage::Depth, nullptr, nullptr);
+    ASSERT_TRUE(depth.success) << depth.message;
+  }
+
+  Pipeline resumed(config);
+  ASSERT_EQ(resumed.nextStage(), Stage::Fusion);
+  const StageOutcome outcome = resumed.runStage(Stage::Fusion, nullptr, nullptr);
+
+  ASSERT_TRUE(outcome.success) << outcome.message;
+}
+
+/// A fusion failure has to say which half of the stage had nothing to work with.
+TEST(Pipeline, FusionSaysWhenNoKeyframeHadADepthMap) {
+  SyntheticCapture capture;
+  capture.writeObjectCapture(12, 128);
+  PipelineConfig config = objectConfig(capture.path());
+  Pipeline pipeline(config);
+  ASSERT_TRUE(pipeline.runStage(Stage::Ingest, nullptr, nullptr).success);
+  ASSERT_TRUE(pipeline.runStage(Stage::PoseRefinement, nullptr, nullptr).success);
+  ASSERT_TRUE(pipeline.runStage(Stage::Depth, nullptr, nullptr).success);
+
+  // Every depth map removed between the stage that made them and the stage that needs them,
+  // which is what a cleared cache or a half-copied project bundle looks like.
+  capture.removeDepthFiles();
+  Pipeline withoutDepth(config);
+  const StageOutcome outcome = withoutDepth.runStage(Stage::Fusion, nullptr, nullptr);
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_NE(outcome.message.find("depth map"), std::string::npos) << outcome.message;
 }
 
 /// With no poses *and* no depth there is nothing to triangulate from, and the

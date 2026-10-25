@@ -596,3 +596,29 @@ mode and every motion band, and that the engine reports the tracking state and s
 was given. That the renderer's guard catches a real driver fault is not tested and cannot be;
 what is tested is that nothing in the app's own code throws on the paths CI can run.
 
+---
+
+## Phase 16 — "Processing stopped during Fusing surfaces"
+
+Reported from a device, with a retry that resumed from fusing surfaces and failed the same way.
+Two bugs: one that caused it, and one that stopped the app saying so.
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| Fusion failed on a scan whose depth had been estimated, and failed again on every retry | The depth stage writes estimated maps to `depth/` and records them on the in-memory frame records. The manifest on disk is the app's record of the capture and never learns about them, so a fresh process -- which is what every resume and every retry is -- loaded the manifest, found no depth files, and fused nothing. The depth maps were on disk the whole time. The filename is a function of the frame index, so fusion now looks for it. |
+| Every reconstruction failure read identically | `ParallaxError.ProcessingFailed` carried the engine's `detail` and left it out of `message`. The engine's reasons are written for the person holding the phone; they were being thrown away one layer from the screen. |
+| "Fusion produced nothing" covered two different problems | No depth at all and depth that did not line up with the poses have different causes and different things to try. Fusion now counts both and says which, with the integration range in centimetres when the subject may simply be out of it. |
+
+The existing resume test missed the first one by using a synthetic capture that had sensor
+depth, so the manifest already named its depth files. The new test estimates depth in one
+`Pipeline`, throws it away, and fuses in another; it fails without the fix.
+
+### Verification boundaries
+
+Whether this was the failure on the device cannot be confirmed from here -- the message that
+would have said so is the one that was being dropped. It is a real failure on a real path,
+reproduced in a test, and it explains a retry that resumes from fusion and fails identically.
+If the device reports something else now, the message will say what.
+

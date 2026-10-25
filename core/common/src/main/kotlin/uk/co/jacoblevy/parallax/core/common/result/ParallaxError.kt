@@ -54,7 +54,20 @@ sealed class ParallaxError {
         val detail: String,
         val resumableFromStage: String?,
     ) : ParallaxError() {
-        override val message: String get() = "Processing stopped during $stage."
+        /**
+         * The stage, and what it said went wrong.
+         *
+         * The detail was carried all the way from the engine and then thrown away here, which
+         * left every reconstruction failure looking identical: a stage name, and two buttons
+         * that do the same thing twice. The engine's reasons are written to be read -- "the
+         * depth maps and poses may disagree", not an error code -- so they belong on screen.
+         */
+        override val message: String
+            get() = detail.trim()
+                .takeIf { it.isNotEmpty() }
+                ?.let { "Processing stopped during $stage: $it." }
+                ?: "Processing stopped during $stage."
+
         override val recovery: RecoveryAction
             get() = resumableFromStage?.let { RecoveryAction.ResumeFrom(it) }
                 ?: RecoveryAction.Retry
