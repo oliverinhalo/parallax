@@ -41,6 +41,7 @@ struct Options {
   /// Use the manifest already in the work directory, poses and all.
   bool keep_manifest = false;
   bool has_poses = false;
+  bool splats = false;
 };
 
 bool looksLikeImage(const fs::path& path) {
@@ -161,6 +162,12 @@ PipelineConfig configFor(const Options& options) {
     config.texture_resolution = 2048;
   }
 
+  // The mode's own stages, so a room run exercises the floor plan and an object run does not
+  // waste time looking for one. Without this the tool reported "room analysis not requested"
+  // on a room capture, which is the one stage a room capture exists for.
+  config.analyse_room = options.mode == CaptureMode::Room;
+  config.train_splats = options.splats;
+
   switch (options.mode) {
     case CaptureMode::Object:
       config.max_integration_depth = 3.0f;
@@ -185,6 +192,8 @@ bool parse(int argc, char** argv, Options* options) {
     const std::string arg = argv[i];
     if (arg == "--quiet") {
       options->quiet = true;
+    } else if (arg == "--splats") {
+      options->splats = true;
     } else if (arg == "--keep-manifest") {
       // For a project directory built elsewhere -- a dataset with real camera poses, say,
       // which is the only way to exercise the path a device capture takes.
@@ -213,7 +222,7 @@ int main(int argc, char** argv) {
   if (!parse(argc, argv, &options)) {
     std::fprintf(stderr,
                  "usage: parallax_run <image-dir> <work-dir> [--mode object|room|area|import]"
-                 " [--preset fast|balanced|high|max] [--quiet] [--keep-manifest]\n");
+                 " [--preset fast|balanced|high|max] [--quiet] [--keep-manifest] [--splats]\n");
     return 2;
   }
 
