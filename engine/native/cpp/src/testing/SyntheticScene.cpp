@@ -234,7 +234,10 @@ RenderResult SyntheticScene::render(const CameraIntrinsics& intrinsics, const Po
 
 Pose SyntheticScene::lookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
   // Build the camera-from-world rotation directly. Camera convention: +X right,
-  // +Y down, +Z forward (the OpenCV/ARCore image convention).
+  // +Y down, +Z forward -- the OpenCV image convention, which is the engine's throughout.
+  // Not ARCore's: its camera pose is +Y up and -Z forward, and the two differ by a half turn
+  // about X. This comment used to claim they were the same, and every device scan fused its
+  // frames behind the camera. The turn is applied where the ARCore pose is read.
   Vec3 forward = (target - eye);
   if (forward.norm() < 1e-9) forward = Vec3::UnitZ();
   forward.normalize();

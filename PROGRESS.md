@@ -638,3 +638,28 @@ If the device reports something else now, the message will say what.
 The AR failure itself is still unexplained: the guard catches it and now reports what threw, but
 nothing here reproduces it. The detail on screen is the mechanism for finding out, not the fix.
 
+---
+
+## Phase 18 — The camera was pointing the other way
+
+Two reports from a device, and both named their own cause once the detail reached the screen.
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| A room scan fused 28 of 28 keyframes into an empty volume | ARCore's camera pose is +Y up and -Z forward; the engine's projection is +Y down and +Z forward. The two differ by a half turn about X, and nothing applied it, so every world point landed behind the camera and no voxel was ever observed. The depth maps and the poses were both fine. The code that was wrong was a comment in the synthetic scene builder asserting the conventions already matched -- which is why every test passed: the fixtures were built in the engine's convention and never exercised ARCore's. |
+| "Scanning stopped unexpectedly", with `SessionPausedException` | The render loop checked that a session object existed, not that it was resumed. After a pause had been applied, the next frame found no pending request and fell through to `update()`, which ARCore answers on a paused session by throwing. Any pause and return ended the scan. |
+
+The pose conversion is a pure function with a test that puts a point a metre in front of the
+phone and asserts it lands a metre in front of the engine's camera; the same test asserts it
+lands *behind* without the turn, which is the bug in one line. The render loop's decision moved
+out of the renderer into `ArRenderLoop`, where "a paused session is left alone rather than drawn
+from" is a test rather than a report from a phone.
+
+### Verification boundaries
+
+Neither fix has been seen working on a device from here. The pose conversion is verified by
+construction and by its effect on a known point; whether a real scan now produces a model
+depends on the rest of the chain being right, which only a device can say.
+

@@ -14,6 +14,7 @@ import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.NotYetAvailableException
 import com.google.ar.core.exceptions.UnavailableException
 import uk.co.jacoblevy.parallax.core.ar.ArSessionSlot
+import uk.co.jacoblevy.parallax.feature.capture.logic.ArPoseConversion
 import uk.co.jacoblevy.parallax.core.model.CameraIntrinsics
 import uk.co.jacoblevy.parallax.core.model.DetectedPlane
 import uk.co.jacoblevy.parallax.core.model.PlaneKind
@@ -92,7 +93,18 @@ class ArCaptureSession(private val context: Context) {
     var failure: ArSessionFailure? = null
         private set
 
+    /** A session object exists. It may be paused: see [isResumed] before calling [update]. */
     val isRunning: Boolean get() = session != null
+
+    /**
+     * The session is resumed and will answer [update].
+     *
+     * Separate from [isRunning] because ARCore answers `update()` on a session that exists but
+     * is paused by throwing `SessionPausedException`, and the render loop used to treat the two
+     * as the same thing.
+     */
+    var isResumed: Boolean = false
+        private set
 
     /** True when the session was configured with depth, which the device may refuse. */
     var depthEnabled: Boolean = false
@@ -171,6 +183,7 @@ class ArCaptureSession(private val context: Context) {
         val current = session ?: return false
         return try {
             current.resume()
+            isResumed = true
             true
         } catch (expected: CameraNotAvailableException) {
             // Another app has the camera. Reported, not logged: the UI says so and offers a
@@ -181,6 +194,9 @@ class ArCaptureSession(private val context: Context) {
     }
 
     fun pause() {
+        // Cleared first. If the pause threw, the session's state is unknown, and the one thing
+        // that must not happen next is `update()` being called on it.
+        isResumed = false
         runCatching { session?.pause() }
             .onFailure { Log.w(TAG, "pausing the AR session failed", it) }
     }
@@ -190,6 +206,7 @@ class ArCaptureSession(private val context: Context) {
             .onFailure { Log.w(TAG, "closing the AR session failed", it) }
         session = null
         textureSet = false
+        isResumed = false
         // Released even when closing threw. A slot held by a session nobody can reach is a
         // capture screen that refuses to open for the rest of the process's life.
         ArSessionSlot.release(this)
@@ -271,10 +288,13 @@ class ArCaptureSession(private val context: Context) {
     private fun Camera.poseOrNull(): Pose? {
         if (trackingState != ArTrackingState.TRACKING) return null
         val matrix = FloatArray(Pose.MATRIX_ELEMENTS)
-        // World-from-camera, column-major: the same convention the manifest, the native engine
-        // and Filament all use, so nothing has to be transposed at a boundary.
+        // World-from-camera, column-major, which the manifest and the engine both take as is.
+        // The axes are another matter: ARCore's camera looks down -Z with +Y up and the
+        // engine's looks down +Z with +Y down, so the pose is turned at this boundary. The
+        // comment that used to be here said no conversion was needed, and fusion quietly
+        // integrated every frame behind the camera.
         displayOrientedPose.toMatrix(matrix, 0)
-        return Pose(matrix)
+        return Pose(ArPoseConversion.toEngineConvention(matrix))
     }
 
     private fun Camera.intrinsicsOrNull(): CameraIntrinsics? {

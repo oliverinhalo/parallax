@@ -16,6 +16,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import uk.co.jacoblevy.parallax.feature.capture.logic.ArLoopStep
+import uk.co.jacoblevy.parallax.feature.capture.logic.ArRenderLoop
 import uk.co.jacoblevy.parallax.feature.capture.session.ArCaptureSession
 import uk.co.jacoblevy.parallax.feature.capture.session.ArFrame
 import uk.co.jacoblevy.parallax.feature.capture.session.ArSessionFailure
@@ -267,17 +269,30 @@ private class ArViewfinderRenderer(
      *   session is closed or has just been paused.
      */
     private fun serviceLifecycle(): Boolean {
-        if (released) {
-            session.close()
-            return false
+        val step = ArRenderLoop.step(
+            released = released,
+            pauseRequested = pauseRequested,
+            resumeRequested = resumeRequested,
+            sessionResumed = session.isResumed,
+        )
+        return when (step) {
+            ArLoopStep.Close -> {
+                session.close()
+                false
+            }
+            ArLoopStep.Pause -> {
+                session.pause()
+                pauseRequested = false
+                false
+            }
+            ArLoopStep.Draw -> true
+            ArLoopStep.Idle -> false
+            ArLoopStep.Resume -> startSession()
         }
-        if (pauseRequested) {
-            session.pause()
-            pauseRequested = false
-            return false
-        }
-        if (!resumeRequested) return session.isRunning
+    }
 
+    /** Create the session if there is not one, then resume it. */
+    private fun startSession(): Boolean {
         resumeRequested = false
         if (!session.isRunning && !session.create(preferDepth)) {
             report(session.failure ?: ArSessionFailure.Unknown)
