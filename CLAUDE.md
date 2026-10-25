@@ -44,6 +44,20 @@ If the native engine changed:
 cmake --build build-host --parallel && ./build-host/parallax_tests
 ```
 
+If the geometry changed, run it on photographs as well as on the synthetic captures:
+
+```bash
+./build-host/parallax_run <folder-of-photographs> /tmp/work --mode room --preset fast
+```
+
+The synthetic captures are rendered by the same code that consumes them, in the same
+conventions, with no lens distortion, no JPEG artefacts and no camera a person ever moved. They
+passed through every failure the first real device reported. The first real dataset put through
+`parallax_run` found four bugs in an afternoon -- unverified matches, a PnP degenerate on
+planar scenes, features detected at the source resolution, and a frame excluded for failing
+once. Add `--keep-manifest` to run a project directory built elsewhere, which is how a dataset
+with real camera poses exercises the path a device capture takes.
+
 If a Compose screen or a design token changed, the screenshots will differ.
 Look at the difference before re-recording it:
 
