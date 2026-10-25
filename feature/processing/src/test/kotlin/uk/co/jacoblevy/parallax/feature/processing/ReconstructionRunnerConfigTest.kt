@@ -102,17 +102,20 @@ class ReconstructionRunnerConfigTest {
     }
 
     @Test
-    fun `the integration range grows with the size of the space`() {
-        val objectRange = configFor(project(CaptureMode.Object)).maxIntegrationDepth
-        val roomRange = configFor(project(CaptureMode.Room)).maxIntegrationDepth
-        val areaRange = configFor(project(CaptureMode.Area)).maxIntegrationDepth
+    fun `the integration ceiling grows with the size of the space, and clears a room`() {
+        val objectCeiling = configFor(project(CaptureMode.Object)).maxIntegrationDepth
+        val roomCeiling = configFor(project(CaptureMode.Room)).maxIntegrationDepth
+        val areaCeiling = configFor(project(CaptureMode.Area)).maxIntegrationDepth
 
-        // The voxel block budget is finite: integrating the floor stretching away behind a
-        // small object spends it all on surface nobody wants, and the extraction comes back
-        // empty. An area scan genuinely needs the range.
-        assertThat(objectRange).isLessThan(roomRange)
-        assertThat(roomRange).isLessThan(areaRange)
-        assertThat(objectRange).isLessThan(2f)
+        assertThat(objectCeiling).isLessThan(roomCeiling)
+        assertThat(roomCeiling).isLessThan(areaCeiling)
+
+        // These are ceilings, not ranges: the engine measures the range from the depth maps,
+        // because where the surface is is a property of the capture and not of the mode. The
+        // object ceiling used to be 1.6 m and used to *be* the range, so standing back from a
+        // chair put every sample past it -- all of them dropped, sixty-nine keyframes fused
+        // into an empty volume. A ceiling has to clear the far side of an ordinary room.
+        assertThat(objectCeiling).isAtLeast(4f)
     }
 
     @Test

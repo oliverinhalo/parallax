@@ -331,13 +331,20 @@ class ReconstructionRunner @Inject constructor(
         const val MIN_TRIANGLES = 5_000
 
         /**
-         * How far to integrate, per mode. An orbit of a small object is a metre and a half of
-         * useful depth; an area scan genuinely needs twelve.
+         * The *ceiling* on how far to integrate, per mode.
+         *
+         * Not the range: the engine measures that from the depth maps, because where the
+         * surface is is a property of the capture and not of the mode. These are guards
+         * against a depth map full of nonsense, so they are generous.
+         *
+         * Object used to be 1.6 m and used to be the range. Standing back from a chair puts
+         * every sample past it, which dropped all of them and fused sixty-nine keyframes into
+         * an empty volume -- a scan of a chair from across a room could not work at all.
          */
-        const val OBJECT_INTEGRATION_DEPTH_M = 1.6f
-        const val ROOM_INTEGRATION_DEPTH_M = 6f
-        const val AREA_INTEGRATION_DEPTH_M = 12f
-        const val IMPORT_INTEGRATION_DEPTH_M = 5f
+        const val OBJECT_INTEGRATION_DEPTH_M = 6f
+        const val ROOM_INTEGRATION_DEPTH_M = 12f
+        const val AREA_INTEGRATION_DEPTH_M = 25f
+        const val IMPORT_INTEGRATION_DEPTH_M = 12f
 
         /**
          * Width the training views are downscaled to.

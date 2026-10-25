@@ -561,6 +561,26 @@ TEST(Pipeline, FailsAtPoseRefinementWhenTheFramesCannotBePlaced) {
   EXPECT_NE(outcome.message.find("frames"), std::string::npos) << outcome.message;
 }
 
+/// Fusion says how far it integrated.
+///
+/// The range is measured from the depth maps rather than set by the capture mode, so the figure
+/// is no longer something a reader can look up -- which means a range that is still wrong is
+/// only visible if the stage reports it. `IntegrationRangeTest` covers the choosing; this
+/// covers the saying, and that the measured range is what the volume is actually built with.
+TEST(Pipeline, FusionReportsTheDepthItIntegratedTo) {
+  SyntheticCapture capture;
+  capture.writeObjectCapture(12, 128);
+  Pipeline pipeline(objectConfig(capture.path()));
+  for (Stage stage : {Stage::Ingest, Stage::PoseRefinement, Stage::Depth}) {
+    ASSERT_TRUE(pipeline.runStage(stage, nullptr, nullptr).success) << stageName(stage);
+  }
+
+  const StageOutcome fusion = pipeline.runStage(Stage::Fusion, nullptr, nullptr);
+
+  ASSERT_TRUE(fusion.success) << fusion.message;
+  EXPECT_NE(fusion.message.find("integrated to"), std::string::npos) << fusion.message;
+}
+
 /// A handful of photos is refused where the number still means something.
 ///
 /// Two views triangulate and see around nothing, so fusion found no closed surface and the run

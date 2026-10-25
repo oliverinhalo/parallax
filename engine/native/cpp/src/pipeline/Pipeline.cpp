@@ -13,6 +13,7 @@
 #include "parallax/exporters/MeshExport.h"
 #include "parallax/features/Features.h"
 #include "parallax/floorplan/PlaneDetection.h"
+#include "parallax/fusion/IntegrationRange.h"
 #include "parallax/io/ImageIo.h"
 #include "parallax/io/JpegIo.h"
 #include "parallax/depth/MultiViewStereo.h"
@@ -62,6 +63,9 @@ constexpr size_t kMinRawPairMatches = 18;
 /// the FAST threshold, the descriptor patch, the match distances -- was chosen against. An
 /// imported photograph can be any size, and matching fell apart on the large ones.
 constexpr int kFeatureLongSide = 1600;
+
+constexpr size_t kDepthRangeSampleFrames = 8;
+constexpr int kDepthRangePixelStride = 8;
 
 /// The fewest frames that can produce a surface rather than merely triangulate.
 ///
@@ -430,6 +434,34 @@ struct Pipeline::Impl {
     }
     const fs::path estimated = projectDir() / "depth" / depthFileNameFor(frame.index);
     return readDepthRaw(estimated.string(), out);
+  }
+
+  /**
+   * A depth to integrate to, taken from the depth maps themselves.
+   *
+   * The 85th percentile of every valid sample across a handful of keyframes, with a quarter
+   * added. A percentile rather than the maximum because a few samples always run off to the
+   * horizon through a window or past the edge of a table, and those are exactly what must not
+   * set the range; the quarter extra so the furthest real surface is inside the band rather
+   * than on its boundary.
+   *
+   * Sampled from a few frames and every eighth pixel: the answer only has to be right to
+   * within a voxel or two, and reading every depth map twice costs more than the stage does.
+   */
+  float measuredDepthRange(const std::vector<int>& keyframes) {
+    std::vector<float> depths;
+    const size_t stride = std::max<size_t>(1, keyframes.size() / kDepthRangeSampleFrames);
+    for (size_t i = 0; i < keyframes.size(); i += stride) {
+      DepthMap depth;
+      if (!loadDepth(frames[keyframes[i]], &depth) || depth.empty()) continue;
+      for (int y = 0; y < depth.height; y += kDepthRangePixelStride) {
+        for (int x = 0; x < depth.width; x += kDepthRangePixelStride) {
+          const float value = depth.at(x, y);
+          if (value > 0.f && std::isfinite(value)) depths.push_back(value);
+        }
+      }
+    }
+    return integrationDepthFrom(&depths, config.max_integration_depth);
   }
 
   // ---- the stages -------------------------------------------------------
@@ -1431,7 +1463,15 @@ StageOutcome Pipeline::Impl::runFusion(const ProgressCallback& progress,
   tsdf.voxel_size = config.voxel_size;
   tsdf.truncation = config.voxel_size * config.truncation_multiplier;
   tsdf.integrate_color = true;
-  tsdf.max_depth = std::max(0.5f, config.max_integration_depth);
+  // How far to integrate, measured rather than assumed.
+  //
+  // `max_integration_depth` is a ceiling now, not the range. As a fixed range it was wrong in
+  // both directions: an object scan capped at 1.6 m threw away every sample from someone
+  // standing back from a chair, and fused sixty-nine keyframes into an empty volume; six
+  // metres for a room spends the voxel budget on the far wall behind the sofa. What the range
+  // actually depends on is where the surface is, and the depth maps say where that is.
+  const float measured = measuredDepthRange(keyframes);
+  tsdf.max_depth = measured;
   // Size the block budget from the memory budget rather than a fixed number, so a 4 GB phone
   // degrades by covering less area instead of being killed by the OS.
   const size_t bytes_per_block = 8 * 8 * 8 * 12 + 64;
@@ -1481,6 +1521,8 @@ StageOutcome Pipeline::Impl::runFusion(const ProgressCallback& progress,
   if (keyframes.empty()) {
     return StageOutcome{false, false, "there are no keyframes to fuse"};
   }
+  const std::string range_note =
+      ", integrated to " + std::to_string(static_cast<int>(tsdf.max_depth * 100)) + " cm";
   if (frames_with_depth == 0) {
     return StageOutcome{false, false,
                         "none of the " + std::to_string(keyframes.size()) +
@@ -1490,10 +1532,8 @@ StageOutcome Pipeline::Impl::runFusion(const ProgressCallback& progress,
     return StageOutcome{false, false,
                         "no surface was found in " + std::to_string(frames_integrated) +
                             " of " + std::to_string(keyframes.size()) +
-                            " keyframes; the depth maps and camera poses may disagree, or the"
-                            " subject may be beyond the " +
-                            std::to_string(static_cast<int>(tsdf.max_depth * 100)) +
-                            " cm integration range"};
+                            " keyframes" + range_note +
+                            "; the depth maps and the camera poses may disagree"};
   }
   // Surface the budget exhaustion rather than letting it show up as a mysteriously incomplete
   // model three stages later.
@@ -1507,7 +1547,7 @@ StageOutcome Pipeline::Impl::runFusion(const ProgressCallback& progress,
   }
   return StageOutcome{true, false,
                       std::to_string(volume.stats().observed_voxels) + " voxels observed" +
-                          note};
+                          range_note + note};
 }
 
 StageOutcome Pipeline::Impl::runMeshing(const ProgressCallback& progress,
@@ -1526,7 +1566,20 @@ StageOutcome Pipeline::Impl::runMeshing(const ProgressCallback& progress,
   report(progress, Stage::Meshing, 0.3, "Extracting the surface");
   Mesh mesh = volume.extractMesh();
   if (mesh.empty()) {
-    return StageOutcome{false, false, "no surface was found in the fused volume"};
+    // What the volume contained, not just that the extraction was empty. A volume with no
+    // voxels at all and one whose voxels never cross from outside a surface to inside it are
+    // different faults -- the first is fusion's, the second is the truncation against the
+    // voxel size -- and "no surface was found" named neither, which cost a round trip to a
+    // device for every guess.
+    const TsdfStats stats = volume.stats();
+    return StageOutcome{
+        false, false,
+        "no surface was found in the fused volume: " + std::to_string(stats.observed_voxels) +
+            " voxels observed in " + std::to_string(stats.allocated_blocks) + " blocks from " +
+            std::to_string(stats.integrated_frames) + " frames, " +
+            std::to_string(stats.dropped_samples) + " samples dropped. A surface needs voxels"
+            " either side of it, so this is either too little depth or a truncation too narrow"
+            " for the voxel size."};
   }
   report(progress, Stage::Meshing, 0.9, "Saving the mesh");
 

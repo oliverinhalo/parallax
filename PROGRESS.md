@@ -778,3 +778,35 @@ the design right.
 Within-stage checkpointing is still absent everywhere, not only in splat training. Every stage
 short enough for that not to matter now does so by being short.
 
+---
+
+## Phase 22 — The range was a constant, and the surface was somewhere else
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| An object scan fused 69 of 69 keyframes into an empty volume | Object mode integrated depth to a fixed 1.6 m, and that figure *was* the range rather than a limit on it. Someone standing back from a chair is further away than that, so every depth sample was dropped. A scan of anything across a room could not work at all. The range is now measured from the depth maps -- the 85th percentile with a quarter added -- and the mode's figure is a ceiling against nonsense, raised to 6 m for an object and 12 for a room. |
+| "No surface was found in the fused volume" said nothing | A volume with no voxels and a volume whose voxels never cross from outside a surface to inside it are different faults -- the first is fusion's, the second is the truncation against the voxel size -- and the message named neither. It now reports voxels, blocks, frames and dropped samples. |
+| Fusion's range was no longer a number anyone could look up | So it reports it. A measured range that is still wrong is invisible otherwise. |
+
+### What this phase got wrong first
+
+The first attempt was a pipeline test asserting that an object orbited at 4 m now fuses. It
+passed before the fix as well as after, because the synthetic scene has a table and a floor
+near the camera whatever the orbit radius -- so it was evidence of nothing. The first *fix* was
+also wrong: it took the smaller of the measured range and the mode's figure, which still capped
+an object scan at 1.6 m and would have changed nothing on a device.
+
+Both came from testing the wrong layer. The decision is now `integrationDepthFrom`, a function
+over a list of depths, with six tests: a chair at two and a half metres (the case that failed), a
+mug with a few samples running off down a hallway (the case the old constant existed to
+prevent), a ceiling capping nonsense, an empty sample set, and a band too shallow to use.
+
+### Verification boundaries
+
+Neither device failure has been reproduced here. The object-scan fix is verified at the level of
+the decision, not of a scan: nothing in CI can produce a capture whose depth maps all exceed a
+range. The room scan's meshing failure is not fixed at all -- the new message is what will say
+which of the two faults it is.
+
