@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -1863,10 +1864,26 @@ StageOutcome Pipeline::Impl::runSplatTraining(const ProgressCallback& progress,
   if (!invalid.empty()) return StageOutcome{false, false, invalid};
 
   bool was_cancelled = false;
+  bool ran_out_of_time = false;
+  int iterations_done = 0;
+  const auto training_started = std::chrono::steady_clock::now();
   const SplatTrainingCallback callback = [&](const SplatTrainingProgress& p) {
     if (checkCancel(cancel)) {
       was_cancelled = true;
       return false;
+    }
+    iterations_done = p.iteration;
+    if (config.splat_time_budget_millis > 0) {
+      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - training_started)
+                               .count();
+      if (elapsed >= config.splat_time_budget_millis) {
+        // Stop and keep what is trained. Returning false is how training is stopped, and the
+        // distinction from a cancellation is this flag: one is the user leaving, the other is
+        // the stage deciding it has had its share of the device's evening.
+        ran_out_of_time = true;
+        return false;
+      }
     }
     const double fraction =
         0.1 + 0.85 * static_cast<double>(p.iteration) / std::max(1, p.total_iterations);
@@ -1880,6 +1897,12 @@ StageOutcome Pipeline::Impl::runSplatTraining(const ProgressCallback& progress,
     summary.splat_backend = "gpu";
   } else {
     if (was_cancelled) return StageOutcome{false, true, "cancelled"};
+    if (ran_out_of_time) {
+      // The GPU path used the budget up. Nothing to fall back to, and the field it trained is
+      // in `cloud` already, so this is the answer rather than the start of a CPU run.
+      report(progress, Stage::SplatTraining, 0.97, "Saving the splat field");
+      summary.splat_backend = "gpu";
+    } else {
     // Falling back rather than failing: a device without a usable compute
     // path still gets a splat field, just a smaller one trained for fewer
     // iterations than a GPU would have managed in the same time.
@@ -1892,9 +1915,15 @@ StageOutcome Pipeline::Impl::runSplatTraining(const ProgressCallback& progress,
     reduced.sh_degree = std::min(1, config.splat_sh_degree);
 
     SplatTrainer trainer(std::move(cloud), std::move(views), reduced);
-    if (!trainer.train(callback)) return StageOutcome{false, true, "cancelled"};
+    // A stopped run is not a failed one. `finish()` returns the field as it stands, and a
+    // field trained for half its schedule is worth keeping: it is a refinement of a model
+    // that already exists, so the alternative to a partial field is no field.
+    if (!trainer.train(callback) && was_cancelled) {
+      return StageOutcome{false, true, "cancelled"};
+    }
     cloud = trainer.finish();
     summary.splat_backend = "cpu";
+    }
   }
 
   if (checkCancel(cancel)) return StageOutcome{false, true, "cancelled"};
@@ -1907,8 +1936,12 @@ StageOutcome Pipeline::Impl::runSplatTraining(const ProgressCallback& progress,
   }
   summary.splat_count = static_cast<long>(cloud.size());
   saveSummary();
-  return StageOutcome{true, false,
-                      std::to_string(cloud.size()) + " gaussians (" + summary.splat_backend + ")"};
+  std::string note = std::to_string(cloud.size()) + " gaussians (" + summary.splat_backend + ")";
+  if (ran_out_of_time) {
+    note += ", stopped at iteration " + std::to_string(iterations_done) +
+            " when the time budget ran out";
+  }
+  return StageOutcome{true, false, note};
 }
 
 StageOutcome Pipeline::Impl::runRoomAnalysis(const ProgressCallback& progress,

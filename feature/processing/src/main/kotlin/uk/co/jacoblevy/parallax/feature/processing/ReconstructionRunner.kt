@@ -277,6 +277,7 @@ class ReconstructionRunner @Inject constructor(
             splatShDegree = if (capabilities.splatsTrainOnGpu) 2 else 1,
             splatImageWidth = SPLAT_TRAINING_WIDTH,
             splatMaxViews = SPLAT_MAX_TRAINING_VIEWS,
+            splatTimeBudgetMillis = SPLAT_TIME_BUDGET_MILLIS,
         )
     }
 
@@ -350,6 +351,20 @@ class ReconstructionRunner @Inject constructor(
         const val SPLAT_MAX_TRAINING_VIEWS = 80
 
         /**
+         * Longest splat training may run before it keeps what it has and stops.
+         *
+         * Iterations are not a budget on a phone. The same count is seconds of GPU compute and
+         * hours of CPU work with sixty thousand gaussians, and a real device sat at 83% for
+         * hours -- with the model it had already built unopenable, because the stage before
+         * finalise had not returned. Four minutes is long enough for the field to be clearly
+         * better than the seeding and short enough that nobody watches it.
+         *
+         * The field is a refinement of a model that already exists, so stopping early costs
+         * sharpness in the splat view and nothing else.
+         */
+        const val SPLAT_TIME_BUDGET_MILLIS = 4L * 60L * 1000L
+
+        /**
          * Bytes the optimiser holds per gaussian.
          *
          * At degree two a gaussian is 38 floats, and training keeps four
@@ -390,6 +405,7 @@ internal data class PipelineConfigJson(
     val splatShDegree: Int = 2,
     val splatImageWidth: Int = 512,
     val splatMaxViews: Int = 80,
+    val splatTimeBudgetMillis: Long = 0,
 )
 
 @Serializable

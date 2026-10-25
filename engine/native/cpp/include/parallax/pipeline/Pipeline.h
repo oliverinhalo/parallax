@@ -97,6 +97,16 @@ struct PipelineConfig {
   int splat_sh_degree = 2;
   int splat_image_width = 512;
   int splat_max_views = 80;
+  /**
+   * Wall-clock ceiling on splat training, in milliseconds. Zero means no ceiling.
+   *
+   * Iterations are not a budget on a phone: the same count is seconds on a GPU and hours on a
+   * CPU with sixty thousand gaussians. A splat field is a refinement rather than the model, so
+   * when the time is up the field trained so far is kept and the stage reports how far it got.
+   * Without this the stage sat at 83% for hours on a real device, with the model it had
+   * already built not viewable because the stage before finalise had not returned.
+   */
+  long splat_time_budget_millis = 0;
 };
 
 /// Reported as each stage advances.

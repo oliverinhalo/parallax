@@ -70,7 +70,8 @@ fun ParallaxNavHost(
                     when (destination) {
                         is ProjectDestination.Viewer ->
                             navController.navigate(ParallaxRoute.Viewer(destination.projectId))
-                        ProjectDestination.Processing ->
+                        ProjectDestination.Processing,
+                        ProjectDestination.AlreadyProcessing ->
                             navController.navigate(ParallaxRoute.Processing)
                         is ProjectDestination.ResumeCapture ->
                             navController.navigate(ParallaxRoute.Capture)

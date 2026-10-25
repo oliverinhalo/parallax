@@ -755,3 +755,26 @@ Threading is not the fix the cost needs. Coarse-to-fine would cut the work rathe
 it, and remains undone. The cap is also a fixed number on a device whose thermal state the
 capture stage already reads and this does not.
 
+---
+
+## Phase 21 — Three reports from one scan
+
+### Bugs this phase's tests caught
+
+| Symptom | Cause |
+| --- | --- |
+| Tapping a scan that was being reconstructed opened the camera | `ProjectLauncherViewModel` decided where a tap goes with two conditions and an `else`, and the `else` meant "carry on capturing". It caught `Queued` and `Processing` as well as `Capturing`. Alarming as well as wrong: the obvious reading of a camera opening is that the scan is gone and this is a new one. The decision is now a pure function, exhaustive over `ProjectStatus` with no `else`, which is the shape that cannot make this mistake -- and nine tests, one per status. |
+| Splat training sat at 83% for hours | There was no wall-clock budget, only an iteration count. The same count is seconds of GPU compute and hours of CPU work with sixty thousand gaussians. Four minutes now, after which the field trained so far is kept and the stage says where it stopped. |
+| The model was unopenable while that happened | Splat training is the stage before finalise, so a model that had been built, cleaned, textured and written could not be opened until a refinement nobody asked for had finished. The budget bounds it; the ordering is still wrong. |
+| Leaving and coming back lost the progress | Nothing checkpoints inside a stage, so a restart begins the stage again. With a four-minute ceiling that costs four minutes rather than hours, which is why the budget came first. |
+
+### Verification boundaries
+
+The stage ordering is not fixed. `ProjectStatus.Ready(refiningSplats)` exists, which says
+someone intended splats to refine behind a viewable model, but the pipeline runs them before
+finalise and nothing takes that path. The budget makes the symptom bearable rather than making
+the design right.
+
+Within-stage checkpointing is still absent everywhere, not only in splat training. Every stage
+short enough for that not to matter now does so by being short.
+

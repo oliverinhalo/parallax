@@ -728,6 +728,41 @@ TEST(Pipeline, TrainsASplatFieldWhenAskedTo) {
   }
 }
 
+/// The time budget keeps what it trained instead of running all night.
+///
+/// A real device sat at 83% for hours, with the model it had already built unopenable because
+/// the stage before finalise had not returned, and lost the work when the user left. The field
+/// is a refinement of a model that already exists, so a partial one is worth keeping and the
+/// stage says how far it got.
+TEST(Pipeline, SplatTrainingStopsWhenItsTimeBudgetRunsOutAndKeepsTheField) {
+  SyntheticCapture capture;
+  capture.writeObjectCapture(10, 128);
+  PipelineConfig config = objectConfig(capture.path());
+  config.train_splats = true;
+  config.splat_iterations = 100000;
+  config.splat_max_gaussians = 20000;
+  // A millisecond: the first callback is already past it, so this asserts the budget is
+  // honoured rather than that it is generous.
+  config.splat_time_budget_millis = 1;
+
+  Pipeline pipeline(config);
+  for (Stage stage : {Stage::Ingest, Stage::PoseRefinement, Stage::Depth, Stage::Fusion,
+                      Stage::Meshing, Stage::MeshCleanup, Stage::Texturing,
+                      Stage::PointCloud}) {
+    ASSERT_TRUE(pipeline.runStage(stage, nullptr, nullptr).success) << stageName(stage);
+  }
+
+  const StageOutcome outcome = pipeline.runStage(Stage::SplatTraining, nullptr, nullptr);
+
+  ASSERT_TRUE(outcome.success) << outcome.message;
+  EXPECT_FALSE(outcome.cancelled);
+  EXPECT_NE(outcome.message.find("time budget"), std::string::npos) << outcome.message;
+  // The field is on disk, and the run can go on to finalise rather than being stuck here.
+  EXPECT_GT(pipeline.summary().splat_count, 0);
+  EXPECT_TRUE(pipeline.runStage(Stage::RoomAnalysis, nullptr, nullptr).success);
+  EXPECT_TRUE(pipeline.runStage(Stage::Finalise, nullptr, nullptr).success);
+}
+
 TEST(Pipeline, TheSplatStageIsSkippedCleanlyWhenItIsNotWanted) {
   SyntheticCapture capture;
   capture.writeObjectCapture(10, 112);

@@ -114,6 +114,8 @@ PipelineConfig parseConfig(const std::string& json_text, bool* ok) {
   config.splat_sh_degree = static_cast<int>(json.get("splatShDegree").asInt(2));
   config.splat_image_width = static_cast<int>(json.get("splatImageWidth").asInt(512));
   config.splat_max_views = static_cast<int>(json.get("splatMaxViews").asInt(80));
+  config.splat_time_budget_millis =
+      static_cast<long>(json.get("splatTimeBudgetMillis").asInt(0));
 
   *ok = !config.project_dir.empty();
   return config;
